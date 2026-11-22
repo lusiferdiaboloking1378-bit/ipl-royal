@@ -1,0 +1,6 @@
+{
+  "name": "IPL Auction & Showdown",
+  "description": "4-phase IPL cricket career game featuring franchise selection, live player auction bidding, 1-on-1 stat card battles, and an interactive 2-over mini cricket match.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

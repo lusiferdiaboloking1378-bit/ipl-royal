@@ -1,0 +1,86 @@
+export const PLAYER_PHOTO_URLS: Record<string, string> = {
+  kohli:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/e/ef/Virat_Kohli_during_the_India_vs_Aus_4th_Test_match_at_Narendra_Modi_Stadium_on_09_March_2023.jpg/330px-Virat_Kohli_during_the_India_vs_Aus_4th_Test_match_at_Narendra_Modi_Stadium_on_09_March_2023.jpg',
+  rohit:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1e/Prime_Minister_Of_Bharat_Shri_Narendra_Damodardas_Modi_with_Shri_Rohit_Gurunath_Sharma_%28Cropped%29.jpg/330px-Prime_Minister_Of_Bharat_Shri_Narendra_Damodardas_Modi_with_Shri_Rohit_Gurunath_Sharma_%28Cropped%29.jpg',
+  surya:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b7/Suryakumar_Yadav_in_PMO_New_Delhi.jpg/330px-Suryakumar_Yadav_in_PMO_New_Delhi.jpg',
+  gill:
+    'https://upload.wikimedia.org/wikipedia/commons/3/34/Shubman_Gill_2023_%28cropped%29.jpg',
+  jaiswal:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/7/71/Yashasvi_Jaiswal_in_PMO_New_Delhi.jpg/330px-Yashasvi_Jaiswal_in_PMO_New_Delhi.jpg',
+  ruturaj:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/27/Ruturaj_Gaikwad.jpeg/330px-Ruturaj_Gaikwad.jpeg',
+  shreyas:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f3/Captain_Shreyas_Iyer_%28Sarpanch_Sahab%29_in_T20.jpg/330px-Captain_Shreyas_Iyer_%28Sarpanch_Sahab%29_in_T20.jpg',
+  head:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b8/RSA_vs_AUS_Day_3-Travis_Head-1.jpg/330px-RSA_vs_AUS_Day_3-Travis_Head-1.jpg',
+  tilak:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0b/Tilak_Varma_in_March_2026.png/330px-Tilak_Varma_in_March_2026.png',
+  faf:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/8/87/Faf_du_Plessis_2019_Boxing_Day.jpg/330px-Faf_du_Plessis_2019_Boxing_Day.jpg',
+  bumrah:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/0/02/Jasprit_Bumrah_in_PMO_New_Delhi.jpg/330px-Jasprit_Bumrah_in_PMO_New_Delhi.jpg',
+  rashid:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/7/71/Rashid_Khan.jpg/330px-Rashid_Khan.jpg',
+  chahal:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/d/df/Yuzvendra_Chahal_in_PMO_New_Delhi.jpg/330px-Yuzvendra_Chahal_in_PMO_New_Delhi.jpg',
+  kuldeep:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/9/91/Kuldeep_Yadav_in_PMO_New_Delhi.jpg/330px-Kuldeep_Yadav_in_PMO_New_Delhi.jpg',
+  shami:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/0/01/Mohammed_Shami_Arjuna_Award_%28cropped%29.jpg/330px-Mohammed_Shami_Arjuna_Award_%28cropped%29.jpg',
+  arshdeep:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/3/36/Prime_Minister_Of_Bharat_Shri_Narendra_Damodardas_Modi_with_Arshdeep_Singh_Family_%28Cropped%29.jpg/330px-Prime_Minister_Of_Bharat_Shri_Narendra_Damodardas_Modi_with_Arshdeep_Singh_Family_%28Cropped%29.jpg',
+  boult:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/23/2018.02.03.22.23.14-AUSvNZL_T20_AUS_innings%2C_SCG_%2839533156665%29.jpg/330px-2018.02.03.22.23.14-AUSvNZL_T20_AUS_innings%2C_SCG_%2839533156665%29.jpg',
+  starc:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6b/RSA_vs_AUS_Day_1_-_Mitchel_Starch_-2.jpg/330px-RSA_vs_AUS_Day_1_-_Mitchel_Starch_-2.jpg',
+  rabada:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d3/RSA_vs_AUS_Day_2_-_Kagiso_Rabada.jpg/330px-RSA_vs_AUS_Day_2_-_Kagiso_Rabada.jpg',
+  bhuvneshwar:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/27/Bhuvneshwar_kumar_With_Rashid_Zirak_%28Bhuvneshwar_Kumar_cropped%29.jpg/330px-Bhuvneshwar_kumar_With_Rashid_Zirak_%28Bhuvneshwar_Kumar_cropped%29.jpg',
+  siraj:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/Prime_Minister_Of_Bharat_Shri_Narendra_Damodardas_Modi_with_Mohammad_Siraj_%28cropped%29.jpg/330px-Prime_Minister_Of_Bharat_Shri_Narendra_Damodardas_Modi_with_Mohammad_Siraj_%28cropped%29.jpg',
+  hardik:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/f/fc/Hardik_Pandya_in_PMO_New_Delhi.jpg/330px-Hardik_Pandya_in_PMO_New_Delhi.jpg',
+  jadeja:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b1/Ravindra_Jadeja_in_2018.jpg/330px-Ravindra_Jadeja_in_2018.jpg',
+  russell:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/9/9f/Andre_Russell_%281%29.jpg/330px-Andre_Russell_%281%29.jpg',
+  narine:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/e/ee/Sunil_Narine.jpg/330px-Sunil_Narine.jpg',
+  axar:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ad/Axar_Patel_in_PMO_New_Delhi.jpg/330px-Axar_Patel_in_PMO_New_Delhi.jpg',
+  maxwell:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3d/Glen_Maxwell_2026_%28cropped%29.jpg/330px-Glen_Maxwell_2026_%28cropped%29.jpg',
+  stoinis:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2b/2018.01.21.15.22.25-Stoinis_%2839081521620%29.jpg/330px-2018.01.21.15.22.25-Stoinis_%2839081521620%29.jpg',
+  curran:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1b/The_Prime_Minister_welcomes_the_World_Cup_winning_cricketers_%2852764650104%29_-_Sam_Curran_%28cropped%29.jpg/330px-The_Prime_Minister_welcomes_the_World_Cup_winning_cricketers_%2852764650104%29_-_Sam_Curran_%28cropped%29.jpg',
+  green:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d0/RSA_vs_AUS_Day_4-Cameron_Green-1.jpg/330px-RSA_vs_AUS_Day_4-Cameron_Green-1.jpg',
+  nitish:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1e/Nitish_Kumar_Reddy_BGT_2024_%28cropped%29_2.jpg/330px-Nitish_Kumar_Reddy_BGT_2024_%28cropped%29_2.jpg',
+  sundar:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/2/23/Washington_Sundar.jpg/330px-Washington_Sundar.jpg',
+  dhoni:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d5/MS_Dhoni_%28Prabhav_%2723_-_RiGI_2023%29.jpg/330px-MS_Dhoni_%28Prabhav_%2723_-_RiGI_2023%29.jpg',
+  pant:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/7/77/Rishabh_Pant.jpg/330px-Rishabh_Pant.jpg',
+  rahul:
+    'https://upload.wikimedia.org/wikipedia/commons/6/69/KL_Rahul_at_Femina_Miss_India_2018_Grand_Finale_%28cropped%29.jpg',
+  samson:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/7/70/Sanju_Samson_in_PMO_New_Delhi.jpg/330px-Sanju_Samson_in_PMO_New_Delhi.jpg',
+  buttler:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/5/56/Jos_buttler_keeping.jpg/330px-Jos_buttler_keeping.jpg',
+  ishan:
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/d/d7/Ishan_Kishan.jpg/330px-Ishan_Kishan.jpg',
+};
+
+export function hasPlayerPhoto(playerId: string): boolean {
+  return Boolean(PLAYER_PHOTO_URLS[playerId]);
+}
+
+export function getPlayerPhotoSrc(playerId: string): string | null {
+  return PLAYER_PHOTO_URLS[playerId] ? `/api/player-photo/${playerId}` : null;
+}
