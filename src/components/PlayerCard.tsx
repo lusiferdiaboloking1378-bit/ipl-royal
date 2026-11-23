@@ -1,5 +1,5 @@
 import React from 'react';
-import { Flame } from 'lucide-react';
+import { Clock, Flame } from 'lucide-react';
 import { getFranchiseById, normalizeStatForBar, STAT_META } from '../data/iplData';
 import { IPLPlayer, StatKey } from '../types/game';
 import { PlayerPortrait, TeamCrest } from './TeamCrest';
@@ -13,11 +13,16 @@ interface PlayerCardProps {
   isWinnerCard?: boolean;
   onSelectStat?: (stat: StatKey) => void;
   priceLabel?: string;
+  countdownMs?: number;
+  countdownMaxMs?: number;
+  auctionClosedState?: 'SOLD' | 'UNSOLD' | null;
 }
 
 const STAT_ORDER: StatKey[] = ['runs', 'strikeRate', 'wickets', 'economy', 'matches'];
+const RING_RADIUS = 76;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-export const PlayerCard: React.FC<PlayerCardProps> = ({
+export const PlayerCard: React.FC<PlayerCardProps> = React.memo(({
   player,
   compact = false,
   selectableStat = false,
@@ -26,8 +31,39 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
   isWinnerCard = false,
   onSelectStat,
   priceLabel,
+  countdownMs,
+  countdownMaxMs = 15000,
+  auctionClosedState = null,
 }) => {
   const franchise = getFranchiseById(player.iplTeam);
+  const showCircularTimer = !compact && countdownMs !== undefined;
+
+  const safeMax = Math.max(1, countdownMaxMs);
+  const clampedMs = showCircularTimer ? Math.max(0, Math.min(safeMax, countdownMs)) : 0;
+  const ratio = auctionClosedState ? 0 : clampedMs / safeMax;
+  const dashOffset = RING_CIRCUMFERENCE * (1 - ratio);
+
+  const ringStroke =
+    auctionClosedState === 'UNSOLD'
+      ? '#f43f5e'
+      : auctionClosedState === 'SOLD'
+      ? '#10b981'
+      : clampedMs <= 3000 || ratio <= 0.25
+      ? '#f43f5e'
+      : clampedMs <= 6000 || ratio <= 0.48
+      ? '#f59e0b'
+      : '#10b981';
+
+  const timerTextColor =
+    auctionClosedState === 'UNSOLD'
+      ? 'text-rose-300 border-rose-500/60'
+      : auctionClosedState === 'SOLD'
+      ? 'text-emerald-300 border-emerald-500/60'
+      : clampedMs <= 3000 || ratio <= 0.25
+      ? 'text-rose-300 border-rose-500/60'
+      : clampedMs <= 6000 || ratio <= 0.48
+      ? 'text-amber-300 border-amber-400/60'
+      : 'text-emerald-300 border-emerald-500/50';
 
   return (
     <div
@@ -48,20 +84,133 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
       />
 
       {!compact && (
-        <div className="relative">
-          <PlayerPortrait
-            playerId={player.id}
-            name={player.name}
-            role={player.role}
-            primaryColor={franchise.primaryColor}
-            secondaryColor={franchise.secondaryColor}
-            jerseyNumber={player.jerseyNumber}
-            variant="stage"
-          />
-          <div className="absolute top-3 right-3 z-30">
-            <TeamCrest franchise={franchise} size="xs" />
+        showCircularTimer ? (
+          <div
+            className="relative h-52 sm:h-56 w-full flex items-center justify-center overflow-hidden select-none"
+            style={{
+              background: `radial-gradient(circle at 50% 42%, ${franchise.primaryColor}45, ${franchise.secondaryColor}80 58%, #090f1d 100%)`,
+            }}
+          >
+            <div
+              className="absolute inset-0 opacity-15 pointer-events-none"
+              style={{
+                backgroundImage:
+                  'linear-gradient(to right, rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.08) 1px, transparent 1px)',
+                backgroundSize: '28px 28px',
+              }}
+            />
+
+            {/* Top Corners: Jersey # + Franchise Crest */}
+            <div className="absolute top-3 left-3.5 z-30 font-mono text-xs font-bold text-slate-200/90 tabular-nums">
+              #{player.jerseyNumber}
+            </div>
+            <div className="absolute top-3 right-3.5 z-30">
+              <TeamCrest franchise={franchise} size="xs" />
+            </div>
+
+            {/* Circular Player Portrait with Draining SVG Countdown Ring */}
+            <div
+              className="relative z-20 w-40 h-40 sm:w-44 sm:h-44 flex items-center justify-center"
+              role="timer"
+              aria-label={
+                auctionClosedState
+                  ? `${player.name} ${auctionClosedState.toLowerCase()}`
+                  : `Bid countdown ${(clampedMs / 1000).toFixed(1)} seconds remaining`
+              }
+            >
+              <svg
+                viewBox="0 0 168 168"
+                className="w-full h-full -rotate-90"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="84"
+                  cy="84"
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke="rgba(148,163,184,0.22)"
+                  strokeWidth="7"
+                />
+                <circle
+                  cx="84"
+                  cy="84"
+                  r={RING_RADIUS}
+                  fill="none"
+                  stroke={ringStroke}
+                  strokeWidth="7"
+                  strokeLinecap="round"
+                  strokeDasharray={RING_CIRCUMFERENCE}
+                  strokeDashoffset={dashOffset}
+                  className="transition-[stroke-dashoffset,stroke] duration-200 ease-linear"
+                />
+              </svg>
+
+              {/* Inner Circular Portrait */}
+              <div className="absolute inset-[13px] rounded-full overflow-hidden ring-2 ring-slate-950/90">
+                <PlayerPortrait
+                  playerId={player.id}
+                  name={player.name}
+                  role={player.role}
+                  primaryColor={franchise.primaryColor}
+                  secondaryColor={franchise.secondaryColor}
+                  jerseyNumber={player.jerseyNumber}
+                  variant="stage"
+                  circular
+                />
+
+                {auctionClosedState && (
+                  <div
+                    className={`absolute inset-0 z-30 flex items-center justify-center ${
+                      auctionClosedState === 'UNSOLD'
+                        ? 'bg-slate-950/85'
+                        : 'bg-emerald-950/80'
+                    }`}
+                  >
+                    <span
+                      className={`font-display text-lg font-extrabold tracking-widest px-3 py-1 rounded-md border ${
+                        auctionClosedState === 'UNSOLD'
+                          ? 'text-rose-200 border-rose-400/70 bg-rose-500/20'
+                          : 'text-emerald-200 border-emerald-400/70 bg-emerald-500/20'
+                      }`}
+                    >
+                      {auctionClosedState}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Numeric Countdown Readout Anchored at Ring Base */}
+              <div
+                className={`absolute -bottom-1.5 left-1/2 -translate-x-1/2 z-30 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-slate-950/95 border font-mono text-xs font-bold tabular-nums shadow-lg whitespace-nowrap ${timerTextColor}`}
+              >
+                <Clock className="w-3 h-3 shrink-0" />
+                <span>
+                  {auctionClosedState
+                    ? auctionClosedState
+                    : `${(clampedMs / 1000).toFixed(1)}s`}
+                </span>
+              </div>
+            </div>
+
+            {/* Bottom stadium fade */}
+            <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent z-10 pointer-events-none" />
           </div>
-        </div>
+        ) : (
+          <div className="relative">
+            <PlayerPortrait
+              playerId={player.id}
+              name={player.name}
+              role={player.role}
+              primaryColor={franchise.primaryColor}
+              secondaryColor={franchise.secondaryColor}
+              jerseyNumber={player.jerseyNumber}
+              variant="stage"
+            />
+            <div className="absolute top-3 right-3 z-30">
+              <TeamCrest franchise={franchise} size="xs" />
+            </div>
+          </div>
+        )
       )}
 
       <div className={compact ? 'p-4' : 'px-5 pb-5 pt-2'}>
@@ -86,6 +235,18 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
                 <span>{player.role}</span>
                 <span aria-hidden="true">·</span>
                 <span>{player.nationality}</span>
+                {player.isNew2026 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-emerald-300 font-semibold">2026 New</span>
+                  </>
+                )}
+                {player.era === 'CLASSIC' && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-amber-300 font-semibold">Classic Legend</span>
+                  </>
+                )}
               </div>
               <h3 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white truncate mt-0.5">
                 {player.name}
@@ -191,4 +352,6 @@ export const PlayerCard: React.FC<PlayerCardProps> = ({
       </div>
     </div>
   );
-};
+});
+
+PlayerCard.displayName = 'PlayerCard';

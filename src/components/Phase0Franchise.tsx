@@ -1,8 +1,8 @@
 import React from 'react';
 import { ArrowRight, Coins, Shield, Swords, Trophy, Users } from 'lucide-react';
 import stadiumNightHeroImg from '../assets/images/stadium_night_hero_1795258895840.jpg';
-import { IPL_FRANCHISES } from '../data/iplData';
-import { Franchise } from '../types/game';
+import { IPL_FRANCHISES, PLAYER_POOL_COUNTS } from '../data/iplData';
+import { Franchise, PlayerPoolMode } from '../types/game';
 import { TeamCrest } from './TeamCrest';
 
 interface Phase0FranchiseProps {
@@ -10,6 +10,8 @@ interface Phase0FranchiseProps {
   onSelectFranchise: (id: string) => void;
   squadSize: 7 | 11;
   onChangeSquadSize: (size: 7 | 11) => void;
+  playerPoolMode: PlayerPoolMode;
+  onChangePlayerPoolMode: (mode: PlayerPoolMode) => void;
   onStartCareer: () => void;
   onOpenFriendsMode: () => void;
   initialPurse: number;
@@ -20,6 +22,8 @@ export const Phase0Franchise: React.FC<Phase0FranchiseProps> = ({
   onSelectFranchise,
   squadSize,
   onChangeSquadSize,
+  playerPoolMode,
+  onChangePlayerPoolMode,
   onStartCareer,
   onOpenFriendsMode,
   initialPurse,
@@ -70,7 +74,8 @@ export const Phase0Franchise: React.FC<Phase0FranchiseProps> = ({
             <div>
               <div className="text-xs font-semibold text-white">01. Live Player Auction</div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Bid against AI rivals for 48 IPL stars with a ₹{initialPurse.toFixed(2)} Cr purse.
+                Bid against AI rivals for {PLAYER_POOL_COUNTS[playerPoolMode]} IPL stars with a ₹
+                {initialPurse.toFixed(2)} Cr purse.
               </p>
             </div>
           </div>
@@ -217,6 +222,44 @@ export const Phase0Franchise: React.FC<Phase0FranchiseProps> = ({
                   11 Players (XI)
                 </button>
               </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-slate-300 font-medium">Auction Player Pool</span>
+                <span className="text-xs font-mono text-amber-400 tabular-nums">
+                  {PLAYER_POOL_COUNTS[playerPoolMode]} players
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => onChangePlayerPoolMode('ALL_PLAYERS')}
+                  className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                    playerPoolMode === 'ALL_PLAYERS'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Old Players (All {PLAYER_POOL_COUNTS.ALL_PLAYERS})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangePlayerPoolMode('PLAYERS_2026')}
+                  className={`py-2 px-2.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                    playerPoolMode === 'PLAYERS_2026'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  2026 Players ({PLAYER_POOL_COUNTS.PLAYERS_2026})
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1.5">
+                {playerPoolMode === 'ALL_PLAYERS'
+                  ? 'All-time IPL pool: includes all classic legends + 2026 stars.'
+                  : '2026 Season pool: only active & newly emerging 2026 IPL players.'}
+              </p>
             </div>
           </div>
 

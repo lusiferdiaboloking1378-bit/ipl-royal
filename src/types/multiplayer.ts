@@ -6,17 +6,30 @@ import type {
   DraftedPlayer,
   DuelRecord,
   IPLPlayer,
+  PlayerPoolMode,
   ShotStyle,
   StatKey,
 } from './game.ts';
+
+export type PostAuctionMode = 'MATCH_SHOWDOWN' | 'AUCTION_VERDICT';
 
 export type RoomPhase =
   | 'LOBBY'
   | 'RETENTION'
   | 'AUCTION'
+  | 'AUCTION_STANDINGS'
   | 'CARD_BATTLE'
   | 'MINI_MATCH'
   | 'POST_MATCH';
+
+export interface LobbyChatMessage {
+  id: string;
+  clientId: string;
+  senderName: string;
+  franchiseId: string;
+  text: string;
+  timestamp: number;
+}
 
 export interface RoomParticipant {
   clientId: string;
@@ -24,6 +37,7 @@ export interface RoomParticipant {
   franchiseId: string;
   isHost: boolean;
   isAi: boolean;
+  isReady: boolean;
   connected: boolean;
   purse: number;
   squad: DraftedPlayer[];
@@ -111,10 +125,14 @@ export interface RoomState {
   roomCode: string;
   matchNumber: number;
   squadSize: 7 | 11;
+  initialPurse: 80 | 100 | 120;
+  playerPoolMode: PlayerPoolMode;
+  postAuctionMode: PostAuctionMode;
   phase: RoomPhase;
   participants: RoomParticipant[];
   auction: RoomAuctionState | null;
   matchups: RoomMatchup[];
+  chatMessages: LobbyChatMessage[];
   announcement: string | null;
 }
 
@@ -125,6 +143,9 @@ export type ClientMessage =
       playerName: string;
       franchiseId: string;
       squadSize: 7 | 11;
+      initialPurse?: 80 | 100 | 120;
+      playerPoolMode: PlayerPoolMode;
+      postAuctionMode?: PostAuctionMode;
     }
   | {
       type: 'room:join';
@@ -143,7 +164,32 @@ export type ClientMessage =
       franchiseId: string;
     }
   | {
+      type: 'room:toggle_ready';
+    }
+  | {
+      type: 'room:kick_participant';
+      targetClientId: string;
+    }
+  | {
+      type: 'room:update_settings';
+      squadSize?: 7 | 11;
+      initialPurse?: 80 | 100 | 120;
+      playerPoolMode?: PlayerPoolMode;
+      postAuctionMode?: PostAuctionMode;
+    }
+  | {
+      type: 'room:chat';
+      text: string;
+    }
+  | {
       type: 'room:start_auction';
+      force?: boolean;
+    }
+  | {
+      type: 'room:launch_matches_from_standings';
+    }
+  | {
+      type: 'room:finish_verdict_round';
     }
   | {
       type: 'auction:confirm_retention';
@@ -219,7 +265,15 @@ export type ServerMessage =
       message: string;
     }
   | {
+      type: 'room:kicked';
+      message: string;
+    }
+  | {
       type: 'room:voice';
       text: string;
       priority?: 'high' | 'normal';
+    }
+  | {
+      type: 'room:tick';
+      countdownMs: number;
     };

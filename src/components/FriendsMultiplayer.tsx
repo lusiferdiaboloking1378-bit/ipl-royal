@@ -2,31 +2,38 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Check,
+  CheckCircle2,
+  Clock,
   Copy,
+  Crown,
   FastForward,
   Flame,
   Gavel,
   Hand,
   Link2,
+  MessageSquare,
   Mic,
   MicOff,
+  Send,
   Shield,
   ShieldAlert,
   SkipForward,
   Swords,
   Target,
   Trophy,
+  UserMinus,
   Users,
   Zap,
 } from 'lucide-react';
 import auctionGavelDeskImg from '../assets/images/auction_gavel_desk_1795258896064.jpg';
-import { getFranchiseById, IPL_FRANCHISES, STAT_META } from '../data/iplData';
+import { getFranchiseById, IPL_FRANCHISES, PLAYER_POOL_COUNTS, STAT_META } from '../data/iplData';
 import { getPlayerPhotoSrc } from '../data/playerPhotos';
-import { DeliveryType, ShotStyle, StatKey } from '../types/game';
-import { ClientMessage, RoomState, ServerMessage } from '../types/multiplayer';
+import { DeliveryType, PlayerPoolMode, ShotStyle, StatKey } from '../types/game';
+import { ClientMessage, PostAuctionMode, RoomState, ServerMessage } from '../types/multiplayer';
 import { auctioneerVoice, StudioFemaleVoiceId } from '../utils/auctioneerVoice';
-import { getAuctionSetLabel, getMaxAllowedBid, roundHalf } from '../utils/engine';
+import { evaluateSquadPower, getAuctionSetLabel, getMaxAllowedBid, roundHalf } from '../utils/engine';
 import { soundFX } from '../utils/sound';
+import { CricketArenaGame } from './CricketArenaGame';
 import { GlobalRankingDashboard } from './GlobalRankingDashboard';
 import { PlayerCard } from './PlayerCard';
 import { PlayerPortrait, TeamCrest } from './TeamCrest';
@@ -41,6 +48,7 @@ interface FriendsMultiplayerProps {
   careerMatches?: number;
   onRecordCareerMatch?: (won: boolean, updatedPurse: number, franchiseId: string) => void;
   squadSize: 7 | 11;
+  defaultPlayerPoolMode?: PlayerPoolMode;
   onExitToSolo: () => void;
 }
 
@@ -64,6 +72,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   careerMatches = 0,
   onRecordCareerMatch,
   squadSize: defaultSquadSize,
+  defaultPlayerPoolMode = 'ALL_PLAYERS',
   onExitToSolo,
 }) => {
   const clientId = useMemo(() => getOrCreateClientId(), []);
@@ -79,7 +88,12 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   const [roomCodeInput, setRoomCodeInput] = useState(initialRoomCode.toUpperCase());
   const [selectedFranchiseId, setSelectedFranchiseId] = useState(initialFranchiseId);
   const [squadSize, setSquadSize] = useState<7 | 11>(defaultSquadSize);
+  const [initialPurse, setInitialPurse] = useState<80 | 100 | 120>(120);
+  const [playerPoolMode, setPlayerPoolMode] = useState<PlayerPoolMode>(defaultPlayerPoolMode);
+  const [postAuctionMode, setPostAuctionMode] = useState<PostAuctionMode>('MATCH_SHOWDOWN');
   const [copiedType, setCopiedType] = useState<'code' | 'link' | null>(null);
+  const [chatInput, setChatInput] = useState('');
+  const [expandedSquadClientId, setExpandedSquadClientId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!playerName && defaultPlayerName) {
@@ -99,7 +113,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   const [retainedIds, setRetainedIds] = useState<string[]>([]);
 
   // Auction right drawer tab
-  const [drawerTab, setDrawerTab] = useState<'SQUAD' | 'TABLES' | 'LOG'>('SQUAD');
+  const [drawerTab, setDrawerTab] = useState<'SQUAD' | 'TABLES' | 'LOG' | 'CHAT'>('SQUAD');
 
   useEffect(() => {
     const unsub = auctioneerVoice.subscribe(() => {
@@ -126,6 +140,9 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
 
   useEffect(() => {
     if (currentAuctionNext) {
+      auctioneerVoice.prewarmPhrase(
+        `Next up, ${currentAuctionNext.name}. Base ${currentAuctionNext.basePrice} crore.`
+      );
       const nextPhoto = getPlayerPhotoSrc(currentAuctionNext.id);
       if (nextPhoto) {
         const img = new Image();
@@ -165,7 +182,23 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
           if (msg.type === 'room:state') {
             setRoom(msg.room);
             sessionStorage.setItem('ipl_showdown_room_code', msg.room.roomCode);
+          } else if (msg.type === 'room:tick') {
+            setRoom((prev) =>
+              prev && prev.auction
+                ? {
+                    ...prev,
+                    auction: {
+                      ...prev.auction,
+                      countdownMs: msg.countdownMs,
+                    },
+                  }
+                : prev
+            );
           } else if (msg.type === 'room:error') {
+            setErrorMsg(msg.message);
+          } else if (msg.type === 'room:kicked') {
+            sessionStorage.removeItem('ipl_showdown_room_code');
+            setRoom(null);
             setErrorMsg(msg.message);
           } else if (msg.type === 'room:voice') {
             auctioneerVoice.speak(msg.text, msg.priority ?? 'normal');
@@ -238,7 +271,17 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
       playerName: playerName.trim() || 'Host Captain',
       franchiseId: selectedFranchiseId,
       squadSize,
+      initialPurse,
+      playerPoolMode,
+      postAuctionMode,
     });
+  };
+
+  const handleSendChat = (textOverride?: string) => {
+    const text = (textOverride ?? chatInput).trim();
+    if (!text) return;
+    sendMsg({ type: 'room:chat', text });
+    if (!textOverride) setChatInput('');
   };
 
   const handleJoinRoom = () => {
@@ -279,25 +322,25 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   // =========================================================================
   if (!room) {
     return (
-      <div className="space-y-6 max-w-4xl mx-auto">
+      <div className="space-y-6 max-w-5xl mx-auto">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-6 sm:p-8 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-800">
             <div>
               <div className="text-xs font-semibold text-amber-400">
-                Friends Group Multiplayer · Up to 10 Players
+                Live Auction Room · 2 to 10 Franchises Simultaneously
               </div>
               <h2 className="font-display text-3xl font-extrabold text-white mt-1">
-                Host or Join a Live IPL Auction Room
+                Host or Join an IPL Auction Lobby
               </h2>
               <p className="text-sm text-slate-400 mt-1">
-                Bid live against your friends with ₹120.00 Cr purses, RTM cards, and a live female
-                AI auctioneer calling every bid.
+                All teams bid together in one real-time auction hall, then crown a Squad Verdict
+                champion or clash in simultaneous 2-over pitches.
               </p>
             </div>
             <button
               type="button"
               onClick={handleLeaveRoom}
-              className="self-start px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 cursor-pointer shrink-0"
+              className="self-start px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 cursor-pointer shrink-0 whitespace-nowrap"
             >
               Back to Solo Career
             </button>
@@ -311,7 +354,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
                   Squad Invite Link Ready — Room{' '}
                   <strong className="font-mono text-amber-300">{initialRoomCode}</strong> is
                   pre-filled below. Pick your franchise and click{' '}
-                  <strong>Join Friends Room</strong>!
+                  <strong>Join Friends Room</strong>.
                 </span>
               </div>
             </div>
@@ -360,51 +403,149 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
           </div>
 
           {/* Two Action Cards: Create vs Join */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-2">
             {/* Create Room */}
-            <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-5 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="font-display text-xl font-bold text-white">Create Friends Room</div>
-                <p className="text-xs text-slate-400">
-                  Start a new private room and share the invite link with your friends group.
-                </p>
-                <div className="grid grid-cols-2 gap-1.5 p-1 rounded-lg bg-slate-900 border border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setSquadSize(7)}
-                    className={`py-2 px-3 rounded-md text-xs font-semibold cursor-pointer ${
-                      squadSize === 7 ? 'bg-amber-400 text-slate-950' : 'text-slate-400'
-                    }`}
-                  >
-                    7 Players (Fast)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSquadSize(11)}
-                    className={`py-2 px-3 rounded-md text-xs font-semibold cursor-pointer ${
-                      squadSize === 11 ? 'bg-amber-400 text-slate-950' : 'text-slate-400'
-                    }`}
-                  >
-                    11 Players (XI)
-                  </button>
+            <div className="lg:col-span-7 rounded-xl border border-slate-800 bg-slate-950/75 p-5 flex flex-col justify-between space-y-4">
+              <div className="space-y-4">
+                <div>
+                  <div className="font-display text-xl font-bold text-white">Create Auction Room</div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Configure purse, squad size, player pool, and post-auction format.
+                  </p>
+                </div>
+
+                {/* Opening Purse & Squad Size */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-slate-300">Opening Purse</div>
+                    <div className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800">
+                      {([80, 100, 120] as const).map((purseVal) => (
+                        <button
+                          key={purseVal}
+                          type="button"
+                          onClick={() => setInitialPurse(purseVal)}
+                          className={`py-2 px-2 rounded-md font-mono text-xs font-bold cursor-pointer tabular-nums whitespace-nowrap ${
+                            initialPurse === purseVal
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          ₹{purseVal}Cr
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-semibold text-slate-300">Squad Size</div>
+                    <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setSquadSize(7)}
+                        className={`py-2 px-2 rounded-md text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                          squadSize === 7 ? 'bg-amber-400 text-slate-950' : 'text-slate-400'
+                        }`}
+                      >
+                        7 Players
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSquadSize(11)}
+                        className={`py-2 px-2 rounded-md text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                          squadSize === 11 ? 'bg-amber-400 text-slate-950' : 'text-slate-400'
+                        }`}
+                      >
+                        11 Players (XI)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Player Pool */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-300">Player Pool</span>
+                    <span className="font-mono text-amber-400 tabular-nums">
+                      {PLAYER_POOL_COUNTS[playerPoolMode]} players
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-lg bg-slate-900 border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setPlayerPoolMode('ALL_PLAYERS')}
+                      className={`py-2 px-2.5 rounded-md text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                        playerPoolMode === 'ALL_PLAYERS'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Old Players (All {PLAYER_POOL_COUNTS.ALL_PLAYERS})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPlayerPoolMode('PLAYERS_2026')}
+                      className={`py-2 px-2.5 rounded-md text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                        playerPoolMode === 'PLAYERS_2026'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      2026 Players ({PLAYER_POOL_COUNTS.PLAYERS_2026})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Post-Auction Mode */}
+                <div className="space-y-1.5">
+                  <div className="text-xs font-semibold text-slate-300">After Auction Ends</div>
+                  <div className="grid grid-cols-2 gap-1.5 p-1 rounded-lg bg-slate-900 border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setPostAuctionMode('MATCH_SHOWDOWN')}
+                      className={`py-2 px-2.5 rounded-md text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                        postAuctionMode === 'MATCH_SHOWDOWN'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Auction + 2-Over Matches
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPostAuctionMode('AUCTION_VERDICT')}
+                      className={`py-2 px-2.5 rounded-md text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                        postAuctionMode === 'AUCTION_VERDICT'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Squad Verdict Rankings
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-snug">
+                    {postAuctionMode === 'MATCH_SHOWDOWN'
+                      ? 'Teams pair into simultaneous 1v1 Card Battles & 2-Over Cricket Matches right after drafting.'
+                      : 'All teams are ranked #1 to #N immediately on Squad Strength, Role Balance & Purse Efficiency (optional matches after).'}
+                  </p>
                 </div>
               </div>
+
               <button
                 type="button"
                 disabled={!connected}
                 onClick={handleCreateRoom}
                 className="w-full py-3 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-display text-lg font-bold tracking-wide transition-colors cursor-pointer"
               >
-                {connected ? 'Create Room (₹120 Cr Purse)' : 'Connecting to Server...'}
+                {connected ? `Create Room (₹${initialPurse} Cr Purse)` : 'Connecting to Server...'}
               </button>
             </div>
 
             {/* Join Room */}
-            <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-5 flex flex-col justify-between space-y-4">
+            <div className="lg:col-span-5 rounded-xl border border-slate-800 bg-slate-950/75 p-5 flex flex-col justify-between space-y-4">
               <div className="space-y-3">
                 <div className="font-display text-xl font-bold text-white">Join with Room Code</div>
                 <p className="text-xs text-slate-400">
-                  Enter the 5-character code shared by your room host.
+                  Enter the 5-character lobby code shared by your host, or open their invite link.
                 </p>
                 <input
                   type="text"
@@ -412,8 +553,19 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
                   value={roomCodeInput}
                   onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
                   placeholder="e.g. IPL42"
-                  className="w-full px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-700 font-mono text-base font-bold tracking-widest text-amber-400 placeholder:text-slate-600 focus:outline-none focus:border-amber-400 uppercase"
+                  className="w-full px-4 py-3 rounded-lg bg-slate-900 border border-slate-700 font-mono text-lg font-bold tracking-widest text-amber-400 placeholder:text-slate-600 focus:outline-none focus:border-amber-400 uppercase"
                 />
+                <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 space-y-1.5">
+                  <div className="font-semibold text-slate-300">How 4+ Teams Play Together:</div>
+                  <p className="leading-relaxed">
+                    1. Everyone enters one shared auction hall and bids live against each other on
+                    every player.
+                  </p>
+                  <p className="leading-relaxed">
+                    2. Once squads are full, all teams are ranked on Squad Power or split onto
+                    simultaneous 1v1 match pitches with a live multi-pitch scoreboard.
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
@@ -431,73 +583,89 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   }
 
   // =========================================================================
-  // 2. FRIENDS ROOM LOBBY
+  // 2. CRICKAUCTION-STYLE FRIENDS ROOM LOBBY
   // =========================================================================
   if (room.phase === 'LOBBY') {
-    const takenFranchises = new Set(room.participants.map((p) => p.franchiseId));
+    const ownerByFranchise = new Map(room.participants.map((p) => [p.franchiseId, p]));
+    const readyCount = room.participants.filter((p) => p.isReady).length;
+    const allGuestsReady = room.participants.every((p) => p.isHost || p.isReady);
+    const poolSummary =
+      room.playerPoolMode === 'PLAYERS_2026'
+        ? `2026 Players (${PLAYER_POOL_COUNTS.PLAYERS_2026})`
+        : `Old Players (All ${PLAYER_POOL_COUNTS.ALL_PLAYERS})`;
+    const modeSummary =
+      room.postAuctionMode === 'AUCTION_VERDICT' ? 'Squad Verdict' : 'Auction + 2-Over Match';
 
     return (
-      <div className="space-y-6 max-w-5xl mx-auto">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-6 sm:p-8 space-y-6">
+      <div className="space-y-5 max-w-6xl mx-auto">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-5 sm:p-7 space-y-6">
+          {/* Broadcast Lobby Header */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-800">
             <div>
-              <div className="text-xs font-semibold text-amber-400">
-                Friends Lobby · {room.squadSize}-Player Squads · ₹120.00 Cr Purse
+              <div className="text-xs font-semibold text-amber-400 font-mono tabular-nums">
+                LIVE LOBBY · {room.squadSize} PLAYERS · ₹{room.initialPurse} CR PURSE · {poolSummary} ·{' '}
+                {modeSummary}
               </div>
-              <h2 className="font-display text-3xl sm:text-4xl font-extrabold text-white mt-1 flex items-center gap-3">
-                <span>Room {room.roomCode}</span>
-              </h2>
-              <p className="text-sm text-slate-400 mt-1">
-                Share this room code or invite link with your friends. Host can start once 2+
-                friends join.
-              </p>
+              <div className="flex flex-wrap items-baseline gap-3 mt-1">
+                <h2 className="font-display text-3xl sm:text-4xl font-extrabold text-white">
+                  Room {room.roomCode}
+                </h2>
+                <span className="font-mono text-sm font-bold text-emerald-400 tabular-nums">
+                  {readyCount}/{room.participants.length} Ready
+                </span>
+              </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => copyInvite('code')}
-                className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <Copy className="w-3.5 h-3.5 text-amber-400" />
-                <span>{copiedType === 'code' ? 'Code Copied!' : `Copy ${room.roomCode}`}</span>
+                <span>{copiedType === 'code' ? 'Code Copied' : `Copy ${room.roomCode}`}</span>
               </button>
               <button
                 type="button"
                 onClick={() => copyInvite('link')}
-                className="px-3.5 py-2.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-xs font-semibold text-blue-300 inline-flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-xs font-semibold text-blue-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <Link2 className="w-3.5 h-3.5" />
-                <span>{copiedType === 'link' ? 'Invite Link Copied!' : 'Copy Invite Link'}</span>
+                <span>{copiedType === 'link' ? 'Link Copied' : 'Copy Invite Link'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => auctioneerVoice.testVoice()}
+                className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-amber-400 text-xs font-semibold text-amber-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Mic className="w-3.5 h-3.5" />
+                <span>Test Voice</span>
               </button>
               <button
                 type="button"
                 onClick={handleLeaveRoom}
-                className="px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 cursor-pointer whitespace-nowrap"
               >
                 Leave
               </button>
             </div>
           </div>
 
-          {/* Visible Squad Invite Link Bar */}
-          <div className="rounded-xl border border-blue-500/35 bg-blue-950/25 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-semibold text-blue-300 flex items-center gap-1.5 mb-1">
-                <Link2 className="w-3.5 h-3.5" />
-                <span>Shareable Squad Join Link (Friends Sign In &amp; Join Directly)</span>
-              </div>
-              <div className="font-mono text-xs text-slate-200 truncate select-all bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2">
+          {/* Shareable Invite URL Strip */}
+          <div className="rounded-xl border border-blue-500/35 bg-blue-950/20 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0 flex-1 flex items-center gap-2.5">
+              <Link2 className="w-4 h-4 text-blue-300 shrink-0" />
+              <div className="font-mono text-xs text-slate-200 truncate select-all">
                 {`${window.location.origin}${window.location.pathname}?room=${room.roomCode}`}
               </div>
             </div>
             <button
               type="button"
               onClick={() => copyInvite('link')}
-              className="px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-colors"
+              className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap"
             >
               <Copy className="w-3.5 h-3.5" />
-              <span>{copiedType === 'link' ? 'Copied Squad Link!' : 'Copy Squad Link'}</span>
+              <span>{copiedType === 'link' ? 'Copied Link' : 'Share Invite URL'}</span>
             </button>
           </div>
 
@@ -507,104 +675,393 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
             </div>
           )}
 
-          {/* Connected Friends List */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-display text-xl font-bold text-white flex items-center gap-2">
-                <Users className="w-5 h-5 text-amber-400" />
-                <span>Franchises in Room ({room.participants.length}/10)</span>
-              </h3>
-              <button
-                type="button"
-                onClick={() => auctioneerVoice.testVoice()}
-                className="text-xs text-amber-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
-              >
-                <Mic className="w-3.5 h-3.5" />
-                <span>Test Female Auctioneer Voice</span>
-              </button>
-            </div>
+          {/* 12-Col Lobby Workspace */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            {/* Left 8 cols: Joined Captains + All 10 IPL Franchise Slots + Host Rules */}
+            <div className="lg:col-span-8 space-y-5">
+              {/* Joined Players List with Ready Status & Host Kick */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-display text-xl font-bold text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-amber-400" />
+                    <span>Joined Captains ({room.participants.length}/10)</span>
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    All guests click Mark Ready before auction starts
+                  </span>
+                </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {room.participants.map((p) => {
-                const f = getFranchiseById(p.franchiseId);
-                return (
-                  <div
-                    key={p.clientId}
-                    className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${
-                      p.clientId === clientId
-                        ? 'bg-amber-500/10 border-amber-400/70'
-                        : 'bg-slate-950/70 border-slate-800'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <TeamCrest franchise={f} size="sm" />
-                      <div className="min-w-0">
-                        <div className="font-semibold text-sm text-white truncate">
-                          {p.name} {p.clientId === clientId && '(You)'}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {room.participants.map((p) => {
+                    const f = getFranchiseById(p.franchiseId);
+                    const isMe = p.clientId === clientId;
+                    return (
+                      <div
+                        key={p.clientId}
+                        className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 ${
+                          isMe
+                            ? 'bg-amber-500/10 border-amber-400/70'
+                            : p.isReady
+                            ? 'bg-emerald-950/20 border-emerald-500/35'
+                            : 'bg-slate-950/75 border-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <TeamCrest franchise={f} size="sm" />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-white truncate flex items-center gap-1.5">
+                              <span>
+                                {p.name}
+                                {isMe ? ' (You)' : ''}
+                              </span>
+                              {p.isHost && <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                            </div>
+                            <div className="text-xs text-slate-400 truncate font-mono tabular-nums">
+                              {f.shortName} · ₹{p.purse.toFixed(0)}Cr ·{' '}
+                              <span
+                                className={
+                                  p.isReady ? 'text-emerald-400 font-semibold' : 'text-amber-300'
+                                }
+                              >
+                                {p.isHost ? 'HOST READY' : p.isReady ? 'READY' : 'WAITING'}
+                              </span>
+                              {!p.connected && ' · Reconnecting'}
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-400 truncate">
-                          {f.shortName} · {p.isHost ? 'Host' : 'Player'} ·{' '}
-                          {p.connected ? 'Online' : 'Reconnecting'}
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {p.isReady ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          ) : (
+                            <Clock className="w-4 h-4 text-amber-400" />
+                          )}
+                          {me?.isHost && !p.isHost && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                sendMsg({ type: 'room:kick_participant', targetClientId: p.clientId })
+                              }
+                              title={`Kick ${p.name}`}
+                              className="px-2 py-1 rounded-md bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/30 text-[11px] font-semibold text-rose-300 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <UserMinus className="w-3 h-3" />
+                              <span>Kick</span>
+                            </button>
+                          )}
                         </div>
                       </div>
-                    </div>
-                    <span className="font-mono text-xs font-bold text-amber-400 tabular-nums shrink-0">
-                      ₹{p.purse.toFixed(0)}Cr
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* All 10 IPL Franchise Slots Grid (Click open franchise to claim) */}
+              {me && (
+                <div className="pt-4 border-t border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Franchise Table (Click an open franchise to switch team)
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {10 - room.participants.length} seats open
                     </span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {IPL_FRANCHISES.map((f) => {
+                      const owner = ownerByFranchise.get(f.id);
+                      const isMine = owner?.clientId === clientId;
+                      const isTakenByOther = Boolean(owner && !isMine);
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          disabled={isTakenByOther}
+                          onClick={() => sendMsg({ type: 'room:change_franchise', franchiseId: f.id })}
+                          className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer disabled:cursor-not-allowed ${
+                            isMine
+                              ? 'bg-amber-400/15 border-amber-400 text-white'
+                              : isTakenByOther
+                              ? 'bg-slate-950/90 border-slate-800/80 opacity-65'
+                              : 'bg-slate-950/60 border-slate-800 hover:border-slate-600 text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <TeamCrest franchise={f} size="xs" />
+                            <span className="font-display text-sm font-bold text-white">
+                              {f.shortName}
+                            </span>
+                          </div>
+                          <div className="mt-1.5 text-[11px] truncate">
+                            {owner ? (
+                              <span className={isMine ? 'text-amber-300 font-semibold' : 'text-slate-400'}>
+                                {owner.name}
+                              </span>
+                            ) : (
+                              <span className="text-emerald-400/90">Open Seat</span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-          {/* Switch Franchise */}
-          {me && (
-            <div className="pt-4 border-t border-slate-800 space-y-2.5">
-              <div className="text-xs font-semibold text-slate-300">Switch Your Franchise</div>
-              <div className="flex flex-wrap gap-2">
-                {IPL_FRANCHISES.map((f) => {
-                  const isMine = me.franchiseId === f.id;
-                  const isTaken = takenFranchises.has(f.id) && !isMine;
-                  return (
+              {/* Host Live Room Rules Editor */}
+              {me?.isHost && (
+                <div className="pt-4 border-t border-slate-800 space-y-3">
+                  <div className="text-xs font-semibold text-slate-300">
+                    Host Lobby Rules (Live Sync)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                      <div className="text-[11px] text-slate-400">Purse</div>
+                      <div className="grid grid-cols-3 gap-1">
+                        {([80, 100, 120] as const).map((pv) => (
+                          <button
+                            key={pv}
+                            type="button"
+                            onClick={() =>
+                              sendMsg({ type: 'room:update_settings', initialPurse: pv })
+                            }
+                            className={`py-1 rounded font-mono font-bold cursor-pointer ${
+                              room.initialPurse === pv
+                                ? 'bg-amber-400 text-slate-950'
+                                : 'bg-slate-900 text-slate-400'
+                            }`}
+                          >
+                            {pv}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                      <div className="text-[11px] text-slate-400">Squad</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {([7, 11] as const).map((sz) => (
+                          <button
+                            key={sz}
+                            type="button"
+                            onClick={() => sendMsg({ type: 'room:update_settings', squadSize: sz })}
+                            className={`py-1 rounded font-mono font-bold cursor-pointer ${
+                              room.squadSize === sz
+                                ? 'bg-amber-400 text-slate-950'
+                                : 'bg-slate-900 text-slate-400'
+                            }`}
+                          >
+                            {sz}P
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                      <div className="text-[11px] text-slate-400">Player Pool</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            sendMsg({ type: 'room:update_settings', playerPoolMode: 'ALL_PLAYERS' })
+                          }
+                          className={`py-1 rounded font-semibold cursor-pointer ${
+                            room.playerPoolMode === 'ALL_PLAYERS'
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}
+                        >
+                          All 150
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            sendMsg({ type: 'room:update_settings', playerPoolMode: 'PLAYERS_2026' })
+                          }
+                          className={`py-1 rounded font-semibold cursor-pointer ${
+                            room.playerPoolMode === 'PLAYERS_2026'
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}
+                        >
+                          2026
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1.5">
+                      <div className="text-[11px] text-slate-400">After Auction</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            sendMsg({
+                              type: 'room:update_settings',
+                              postAuctionMode: 'MATCH_SHOWDOWN',
+                            })
+                          }
+                          className={`py-1 rounded font-semibold cursor-pointer ${
+                            room.postAuctionMode === 'MATCH_SHOWDOWN'
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}
+                        >
+                          Matches
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            sendMsg({
+                              type: 'room:update_settings',
+                              postAuctionMode: 'AUCTION_VERDICT',
+                            })
+                          }
+                          className={`py-1 rounded font-semibold cursor-pointer ${
+                            room.postAuctionMode === 'AUCTION_VERDICT'
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}
+                        >
+                          Verdict
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right 4 cols: Live Lobby Chat + Mark Ready / Start Controls */}
+            <div className="lg:col-span-4 rounded-xl border border-slate-800 bg-slate-950/80 p-4 flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <div className="font-display text-lg font-bold text-white flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-amber-400" />
+                    <span>Lobby Chat</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    {room.chatMessages.length} msgs
+                  </span>
+                </div>
+
+                <div className="space-y-2 h-[220px] overflow-y-auto pr-1">
+                  {room.chatMessages.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-center text-xs text-slate-500 px-3">
+                      Say hi to your squad or call out who is next before starting.
+                    </div>
+                  ) : (
+                    room.chatMessages.map((c) => {
+                      const f = getFranchiseById(c.franchiseId);
+                      return (
+                        <div
+                          key={c.id}
+                          className="px-2.5 py-2 rounded-lg bg-slate-900/90 border border-slate-800/80 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-0.5">
+                            <span className="font-semibold text-amber-400 truncate">
+                              {c.senderName} · {f.shortName}
+                            </span>
+                          </div>
+                          <div className="text-slate-200 break-words">{c.text}</div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Quick pings */}
+                <div className="flex flex-wrap gap-1.5">
+                  {['Ready!', 'Wait 1 min', 'Start Auction!'].map((quick) => (
                     <button
-                      key={f.id}
+                      key={quick}
                       type="button"
-                      disabled={isTaken}
-                      onClick={() => sendMsg({ type: 'room:change_franchise', franchiseId: f.id })}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed ${
-                        isMine
-                          ? 'bg-amber-400 text-slate-950 border-amber-400'
-                          : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-600'
-                      }`}
+                      onClick={() => handleSendChat(quick)}
+                      className="px-2.5 py-1 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-300 cursor-pointer"
                     >
-                      {f.shortName}
+                      {quick}
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSendChat();
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <input
+                    type="text"
+                    maxLength={180}
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Message lobby..."
+                    className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    type="submit"
+                    className="p-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 cursor-pointer shrink-0"
+                    aria-label="Send chat message"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </form>
+              </div>
+
+              {/* Ready Toggle & Start Controls */}
+              <div className="pt-3 border-t border-slate-800 space-y-2.5">
+                {me && !me.isHost && (
+                  <button
+                    type="button"
+                    onClick={() => sendMsg({ type: 'room:toggle_ready' })}
+                    className={`w-full py-3.5 px-5 rounded-xl font-display text-lg font-bold tracking-wide inline-flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                      me.isReady
+                        ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                        : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span>{me.isReady ? 'Marked Ready (Click to Undo)' : 'Mark Ready'}</span>
+                  </button>
+                )}
+
+                {me?.isHost ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={room.participants.length < 2 || !allGuestsReady}
+                      onClick={() => sendMsg({ type: 'room:start_auction' })}
+                      className="w-full py-3.5 px-5 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-display text-lg font-bold tracking-wide inline-flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      <span>Start Live Auction</span>
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                    {room.participants.length >= 2 && !allGuestsReady && (
+                      <button
+                        type="button"
+                        onClick={() => sendMsg({ type: 'room:start_auction', force: true })}
+                        className="w-full py-2 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-amber-300 cursor-pointer"
+                      >
+                        Start Anyway ({readyCount}/{room.participants.length} Ready)
+                      </button>
+                    )}
+                    <div className="text-[11px] text-center text-slate-400">
+                      {room.participants.length < 2
+                        ? 'Share Room Code or Invite Link so 1+ friend joins.'
+                        : allGuestsReady
+                        ? 'All captains marked Ready!'
+                        : 'Waiting for captains to click Mark Ready.'}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-[11px] text-center text-slate-400">
+                    {me?.isReady
+                      ? 'You are Ready! Waiting for Host to start the auction.'
+                      : 'Click Mark Ready above once you picked your franchise.'}
+                  </div>
+                )}
               </div>
             </div>
-          )}
-
-          {/* Start Action */}
-          <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="text-xs text-slate-400">
-              {me?.isHost
-                ? room.participants.length < 2
-                  ? 'Invite at least 1 friend using the room code or link above to start.'
-                  : 'All friends ready! Click Start Friends Auction to enter the auction hall.'
-                : 'Waiting for the Room Host to start the auction...'}
-            </div>
-            {me?.isHost && (
-              <button
-                type="button"
-                disabled={room.participants.length < 2}
-                onClick={() => sendMsg({ type: 'room:start_auction' })}
-                className="w-full sm:w-auto py-3.5 px-7 rounded-xl bg-amber-400 hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-display text-lg font-bold tracking-wide inline-flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed"
-              >
-                <span>Start Friends Auction</span>
-                <ArrowRight className="w-5 h-5" />
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -796,7 +1253,19 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
                     Lot #{auc.currentIndex + 1} / {auc.queue.length}
                   </span>
                 </div>
-                <PlayerCard player={currentPlayer} priceLabel="Base Price" />
+                <PlayerCard
+                  player={currentPlayer}
+                  priceLabel="Base Price"
+                  countdownMs={auc.soldBanner ? 0 : auc.countdownMs}
+                  countdownMaxMs={auc.highestBidderId === null ? 15000 : 8000}
+                  auctionClosedState={
+                    auc.soldBanner
+                      ? auc.soldBanner.winnerClientId === 'UNSOLD'
+                        ? 'UNSOLD'
+                        : 'SOLD'
+                      : null
+                  }
+                />
                 {nextOnDeck && (
                   <div className="px-3.5 py-2 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-2.5 text-xs">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -882,7 +1351,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
               </div>
               <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-950">
                 <div
-                  className={`h-full transition-all duration-100 ${
+                  className={`h-full transition-all duration-200 ease-linear ${
                     auc.countdownMs <= 2000
                       ? 'bg-rose-500'
                       : auc.countdownMs <= 5000
@@ -1117,13 +1586,13 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
             </div>
           </div>
 
-          {/* Right: Squad & Live Hammer Ledger */}
+          {/* Right: Squad, Friends, Ledger & Chat */}
           <div className="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/95 p-4 space-y-3.5">
-            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-semibold">
+            <div className="grid grid-cols-4 gap-1 p-1 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-semibold">
               <button
                 type="button"
                 onClick={() => setDrawerTab('SQUAD')}
-                className={`py-1.5 px-2 rounded-lg cursor-pointer ${
+                className={`py-1.5 px-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
                   drawerTab === 'SQUAD' ? 'bg-amber-400 text-slate-950' : 'text-slate-400'
                 }`}
               >
@@ -1132,20 +1601,29 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
               <button
                 type="button"
                 onClick={() => setDrawerTab('TABLES')}
-                className={`py-1.5 px-2 rounded-lg cursor-pointer ${
+                className={`py-1.5 px-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
                   drawerTab === 'TABLES' ? 'bg-sky-400 text-slate-950' : 'text-slate-400'
                 }`}
               >
-                Friends
+                Teams
               </button>
               <button
                 type="button"
                 onClick={() => setDrawerTab('LOG')}
-                className={`py-1.5 px-2 rounded-lg cursor-pointer ${
+                className={`py-1.5 px-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
                   drawerTab === 'LOG' ? 'bg-slate-700 text-white' : 'text-slate-400'
                 }`}
               >
                 Ledger
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawerTab('CHAT')}
+                className={`py-1.5 px-1.5 rounded-lg cursor-pointer whitespace-nowrap ${
+                  drawerTab === 'CHAT' ? 'bg-emerald-400 text-slate-950' : 'text-slate-400'
+                }`}
+              >
+                Chat
               </button>
             </div>
 
@@ -1194,24 +1672,34 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
 
             {drawerTab === 'TABLES' && (
               <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
-                {room.participants.map((p) => (
-                  <div
-                    key={p.clientId}
-                    className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-xs flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="font-semibold text-white">
-                        {p.name} ({p.franchiseId})
+                {room.participants.map((p) => {
+                  const ev = evaluateSquadPower(
+                    p.squad,
+                    room.squadSize,
+                    p.purse,
+                    room.initialPurse
+                  );
+                  return (
+                    <div
+                      key={p.clientId}
+                      className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-white">
+                          {p.name} ({p.franchiseId})
+                        </div>
+                        <span className="font-mono font-bold text-amber-400 tabular-nums">
+                          ₹{p.purse.toFixed(1)}Cr
+                        </span>
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        {p.squad.length}/{room.squadSize} drafted
+                      <div className="text-[11px] text-slate-400 font-mono tabular-nums">
+                        {p.squad.length}/{room.squadSize} · BAT {ev.roleCounts.Batter} · BOWL{' '}
+                        {ev.roleCounts.Bowler} · AR {ev.roleCounts['All-Rounder']} · WK{' '}
+                        {ev.roleCounts.Wicketkeeper}
                       </div>
                     </div>
-                    <span className="font-mono font-bold text-amber-400">
-                      ₹{p.purse.toFixed(1)}Cr
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1225,6 +1713,204 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
                     {l.text}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {drawerTab === 'CHAT' && (
+              <div className="space-y-2.5">
+                <div className="space-y-1.5 max-h-[310px] overflow-y-auto pr-1">
+                  {room.chatMessages.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-500">
+                      No messages yet. Banter live during bidding!
+                    </div>
+                  ) : (
+                    room.chatMessages.map((c) => (
+                      <div
+                        key={c.id}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-950/80 border border-slate-800 text-xs"
+                      >
+                        <span className="font-semibold text-amber-400">
+                          {c.senderName} ({c.franchiseId}):{' '}
+                        </span>
+                        <span className="text-slate-200 break-words">{c.text}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSendChat();
+                  }}
+                  className="flex items-center gap-1.5"
+                >
+                  <input
+                    type="text"
+                    maxLength={180}
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Chat in auction..."
+                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    type="submit"
+                    className="p-1.5 rounded-lg bg-amber-400 text-slate-950 cursor-pointer shrink-0"
+                    aria-label="Send auction chat"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // 4B. CRICKAUCTION STANDINGS & SQUAD EVALUATION VERDICT
+  // =========================================================================
+  if (room.phase === 'AUCTION_STANDINGS' && me) {
+    const ranked = [...room.participants]
+      .filter((p) => !p.isAi)
+      .map((p) => ({
+        participant: p,
+        eval: evaluateSquadPower(p.squad, room.squadSize, p.purse, room.initialPurse),
+      }))
+      .sort((a, b) => b.eval.totalScore - a.eval.totalScore || b.participant.purse - a.participant.purse);
+
+    return (
+      <div className="space-y-6 max-w-5xl mx-auto">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-800">
+            <div>
+              <div className="text-xs font-semibold text-amber-400 font-mono tabular-nums">
+                ROOM {room.roomCode} · AUCTION COMPLETE · {ranked.length} FRANCHISES RANKED
+              </div>
+              <h2 className="font-display text-3xl sm:text-4xl font-extrabold text-white mt-1">
+                Final Squad Power Leaderboard
+              </h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Scored out of 100 on Squad Strength (60 pts), Role Balance (25 pts), and Remaining
+                Purse Efficiency (15 pts).
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {ranked.map(({ participant: p, eval: ev }, idx) => {
+              const f = getFranchiseById(p.franchiseId);
+              const isExpanded = expandedSquadClientId === p.clientId;
+              const isMe = p.clientId === clientId;
+              return (
+                <div
+                  key={p.clientId}
+                  className={`rounded-xl border overflow-hidden ${
+                    idx === 0
+                      ? 'bg-amber-500/10 border-amber-400/70'
+                      : isMe
+                      ? 'bg-slate-950/90 border-sky-500/50'
+                      : 'bg-slate-950/70 border-slate-800'
+                  }`}
+                >
+                  <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <span
+                        className={`font-mono text-xl font-bold w-8 shrink-0 tabular-nums ${
+                          idx === 0 ? 'text-amber-400' : 'text-slate-400'
+                        }`}
+                      >
+                        #{idx + 1}
+                      </span>
+                      <TeamCrest franchise={f} size="sm" />
+                      <div className="min-w-0">
+                        <div className="font-display text-xl font-bold text-white truncate">
+                          {p.name} · {f.shortName}
+                          {isMe ? ' (You)' : ''}
+                        </div>
+                        <div className="text-xs text-slate-400 font-mono tabular-nums">
+                          Avg OVR {ev.avgOvr} · Top Star {ev.topStarName} ({ev.topStarRating}) · Purse{' '}
+                          ₹{p.purse.toFixed(1)}Cr
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
+                          Strength {ev.strengthPts}/60 · Balance {ev.balancePts}/25 · Purse{' '}
+                          {ev.pursePts}/15 · BAT {ev.roleCounts.Batter} · BOWL{' '}
+                          {ev.roleCounts.Bowler} · AR {ev.roleCounts['All-Rounder']} · WK{' '}
+                          {ev.roleCounts.Wicketkeeper}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between md:justify-end gap-4 shrink-0">
+                      <div className="text-right">
+                        <div className="text-[11px] text-slate-400">Auction Score</div>
+                        <div className="font-mono text-2xl font-bold text-amber-400 tabular-nums">
+                          {ev.totalScore.toFixed(1)}
+                          <span className="text-xs text-slate-400">/100</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedSquadClientId(isExpanded ? null : p.clientId)
+                        }
+                        className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
+                      >
+                        {isExpanded ? 'Hide Squad' : `View Squad (${p.squad.length})`}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {p.squad.map((sp) => (
+                        <div
+                          key={sp.id}
+                          className="px-3 py-2 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-semibold text-white truncate">{sp.name}</div>
+                            <div className="text-[11px] text-slate-400">
+                              {sp.role} · OVR {sp.overallRating}
+                            </div>
+                          </div>
+                          <span className="font-mono font-bold text-amber-400 shrink-0 tabular-nums">
+                            {sp.retained ? 'Retained' : `₹${sp.boughtPrice.toFixed(1)}Cr`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="text-xs text-slate-400">
+              {me.isHost
+                ? 'Crown the Squad Verdict winner now, or launch simultaneous 1v1 2-Over Matches.'
+                : 'Waiting for Host to finalize Squad Verdict or launch 2-Over Matches...'}
+            </div>
+            {me.isHost && (
+              <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={() => sendMsg({ type: 'room:launch_matches_from_standings' })}
+                  className="px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-sky-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Swords className="w-4 h-4" />
+                  <span>Play 2-Over Matches Now</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendMsg({ type: 'room:finish_verdict_round' })}
+                  className="px-5 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-display text-base font-bold inline-flex items-center gap-2 cursor-pointer whitespace-nowrap"
+                >
+                  <Trophy className="w-4 h-4" />
+                  <span>Crown Auction Champion</span>
+                </button>
               </div>
             )}
           </div>
@@ -1288,16 +1974,53 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
       );
     }
 
+    const multiPitchCardStrip = room.matchups.length > 1 && (
+      <div className="rounded-xl border border-slate-800 bg-slate-950/85 p-3">
+        <div className="text-[11px] font-semibold text-slate-400 mb-2">
+          Simultaneous Matchups in Room {room.roomCode} ({room.matchups.length} pitches)
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          {room.matchups.map((m, idx) => {
+            const h = room.participants.find((p) => p.clientId === m.homeClientId);
+            const a = room.participants.find((p) => p.clientId === m.awayClientId);
+            const isMine = m.id === myMatchup.id;
+            return (
+              <div
+                key={m.id}
+                className={`px-3 py-2 rounded-lg border text-xs flex items-center justify-between gap-2 ${
+                  isMine
+                    ? 'bg-amber-500/10 border-amber-400/60'
+                    : 'bg-slate-900/80 border-slate-800'
+                }`}
+              >
+                <span className="font-semibold text-white truncate">
+                  Pitch {idx + 1}: {h?.franchiseId} vs {a?.franchiseId}
+                </span>
+                <span className="font-mono text-amber-400 shrink-0 tabular-nums">
+                  {m.tossComplete
+                    ? 'Ready'
+                    : `Duel ${Math.min(room.squadSize, m.roundIdx + 1)}/${room.squadSize}`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+
     // Waiting if our matchup already completed toss while another friend pair finishes
     if (myMatchup.tossComplete) {
       return (
-        <div className="max-w-xl mx-auto rounded-2xl border border-slate-800 bg-slate-900/95 p-8 text-center space-y-3">
-          <div className="font-display text-2xl font-bold text-white">
-            Your Matchup is Ready!
+        <div className="max-w-3xl mx-auto space-y-4">
+          {multiPitchCardStrip}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-8 text-center space-y-3">
+            <div className="font-display text-2xl font-bold text-white">
+              Your Matchup is Ready!
+            </div>
+            <p className="text-sm text-slate-400">
+              Waiting for other pitch(es) in Room {room.roomCode} to finish their Card Battle...
+            </p>
           </div>
-          <p className="text-sm text-slate-400">
-            Waiting for other friends in Room {room.roomCode} to finish their Card Battle...
-          </p>
         </div>
       );
     }
@@ -1314,11 +2037,12 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
 
     return (
       <div className="space-y-6">
+        {multiPitchCardStrip}
         {me.isHost && (
           <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/25 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="text-xs text-emerald-100">
               <strong className="text-white">Auction Complete:</strong> Play the Card Stat Battle
-              for +Bonus Runs, or jump the entire squad straight into the 2-Over Cricket Match now.
+              for +Bonus Runs, or jump all pitches straight into the 2-Over Cricket Match now.
             </div>
             <button
               type="button"
@@ -1433,16 +2157,64 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   // 6. FRIENDS 2-OVER MINI MATCH
   // =========================================================================
   if (room.phase === 'MINI_MATCH' && myMatchup && me) {
+    const multiPitchStrip = room.matchups.length > 1 && (
+      <div className="rounded-xl border border-slate-800 bg-slate-950/85 p-3">
+        <div className="text-[11px] font-semibold text-slate-400 mb-2">
+          All Live Pitches in Room {room.roomCode} ({room.matchups.length} simultaneous matches)
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          {room.matchups.map((m, idx) => {
+            const h = room.participants.find((p) => p.clientId === m.homeClientId);
+            const a = room.participants.find((p) => p.clientId === m.awayClientId);
+            const isMine = m.id === myMatchup.id;
+            const batSide = room.participants.find((p) => p.clientId === m.battingClientId);
+            return (
+              <div
+                key={m.id}
+                className={`px-3 py-2 rounded-lg border text-xs flex items-center justify-between gap-2 ${
+                  isMine
+                    ? 'bg-amber-500/10 border-amber-400/60'
+                    : 'bg-slate-900/80 border-slate-800'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-white truncate">
+                    Pitch {idx + 1}: {h?.franchiseId} vs {a?.franchiseId}
+                  </div>
+                  <div className="text-[11px] text-slate-400 truncate">
+                    {m.matchComplete
+                      ? m.winMarginText
+                      : `${batSide?.franchiseId} batting (Inn ${m.inningsNum})`}
+                  </div>
+                </div>
+                <span className="font-mono font-bold text-amber-400 shrink-0 tabular-nums">
+                  {m.matchComplete
+                    ? 'FINAL'
+                    : `${m.runs}/${m.wickets} (${Math.floor(m.ballsBowled / 6)}.${
+                        m.ballsBowled % 6
+                      })`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+
     if (myMatchup.matchComplete) {
       return (
-        <div className="max-w-xl mx-auto rounded-2xl border border-slate-800 bg-slate-900/95 p-8 text-center space-y-3">
-          <Trophy className="w-10 h-10 text-amber-400 mx-auto" />
-          <div className="font-display text-3xl font-bold text-white">
-            {myMatchup.winnerClientId === clientId ? 'You Won Your Match!' : 'Match Completed'}
+        <div className="space-y-5 max-w-4xl mx-auto">
+          {multiPitchStrip}
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-8 text-center space-y-3">
+            <Trophy className="w-10 h-10 text-amber-400 mx-auto" />
+            <div className="font-display text-3xl font-bold text-white">
+              {myMatchup.winnerClientId === clientId ? 'You Won Your Match!' : 'Match Completed'}
+            </div>
+            <p className="text-sm text-slate-400">
+              {myMatchup.winMarginText}. Waiting for other pitch(es) in Room {room.roomCode} to
+              finish...
+            </p>
           </div>
-          <p className="text-sm text-slate-400">
-            {myMatchup.winMarginText}. Waiting for other friends in the room to finish...
-          </p>
         </div>
       );
     }
@@ -1452,6 +2224,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
     const isMeBatting = battingPlayer.clientId === clientId;
     const isMeBowling = bowlingPlayer.clientId === clientId;
     const batFranchise = getFranchiseById(battingPlayer.franchiseId);
+    const bowlFranchise = getFranchiseById(bowlingPlayer.franchiseId);
 
     const activeBatter =
       battingPlayer.squad.find((p) => p.id === myMatchup.activeBatterId) || battingPlayer.squad[0];
@@ -1463,6 +2236,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
 
     return (
       <div className="space-y-6">
+        {multiPitchStrip}
         {/* Live Match Scorebug */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
@@ -1514,7 +2288,7 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 space-y-4">
+            <div className="lg:col-span-8 space-y-4">
               {/* Batter & Bowler cards */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/95">
@@ -1612,82 +2386,48 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
                 </div>
               )}
 
-              {/* Live Action Panel */}
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-5 space-y-4">
-                {isMeBatting ? (
-                  myMatchup.pendingShot ? (
-                    <div className="py-4 text-center text-sm text-amber-300 font-semibold">
-                      Shot locked ({myMatchup.pendingShot})! Waiting for {bowlingPlayer.name}'s
-                      delivery...
-                    </div>
-                  ) : (
-                    <>
-                      <div className="text-sm font-semibold text-white">Choose Your Shot:</div>
-                      <div className="grid grid-cols-3 gap-3">
-                        {(
-                          [
-                            { id: 'DEFEND', label: 'Defend', icon: Shield },
-                            { id: 'BALANCED', label: 'Balanced', icon: Target },
-                            { id: 'LOFTED', label: 'Lofted', icon: Zap },
-                          ] as const
-                        ).map((s) => {
-                          const Icon = s.icon;
-                          return (
-                            <button
-                              key={s.id}
-                              type="button"
-                              onClick={() =>
-                                sendMsg({
-                                  type: 'match:submit_shot',
-                                  matchupId: myMatchup.id,
-                                  shot: s.id as ShotStyle,
-                                })
-                              }
-                              className="p-3.5 rounded-xl border border-slate-700 bg-slate-950 hover:border-amber-400 text-left cursor-pointer"
-                            >
-                              <div className="flex items-center gap-1.5 font-semibold text-sm text-white">
-                                <Icon className="w-4 h-4 text-amber-400" />
-                                <span>{s.label}</span>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )
-                ) : myMatchup.pendingDelivery ? (
-                  <div className="py-4 text-center text-sm text-sky-300 font-semibold">
-                    Delivery locked ({myMatchup.pendingDelivery})! Waiting for {battingPlayer.name}'s
-                    shot...
-                  </div>
-                ) : (
-                  <>
-                    <div className="text-sm font-semibold text-white">Choose Delivery Type:</div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {(['YORKER', 'BOUNCER', 'SLOWER', 'SPIN'] as DeliveryType[]).map((del) => (
-                        <button
-                          key={del}
-                          type="button"
-                          onClick={() =>
-                            sendMsg({
-                              type: 'match:submit_delivery',
-                              matchupId: myMatchup.id,
-                              delivery: del,
-                            })
-                          }
-                          className="p-3.5 rounded-xl border border-slate-700 bg-slate-950 hover:border-sky-400 text-center text-xs font-bold text-sky-300 cursor-pointer"
-                        >
-                          {del}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
+              {/* 3D Cricket Stadium & Gamepad Controller */}
+              <CricketArenaGame
+                battingFranchise={batFranchise}
+                bowlingFranchise={bowlFranchise}
+                batterName={activeBatter.name}
+                bowlerName={activeBowler.name}
+                batterPlayer={activeBatter}
+                bowlerPlayer={activeBowler}
+                isUserBatting={isMeBatting}
+                isUserBowling={isMeBowling}
+                disabled={isMeBatting && myMatchup.needsNewBatter}
+                waitingText={
+                  isMeBatting && myMatchup.pendingShot
+                    ? `Shot locked (${myMatchup.pendingShot}) — Waiting for ${bowlingPlayer.name}'s delivery...`
+                    : isMeBowling && myMatchup.pendingDelivery
+                    ? `Delivery locked (${myMatchup.pendingDelivery}) — Waiting for ${battingPlayer.name}'s shot...`
+                    : !isMeBatting && !isMeBowling
+                    ? 'Spectating pitch...'
+                    : null
+                }
+                latestBall={myMatchup.ballLog[0] ?? null}
+                ballNumber={myMatchup.ballsBowled + 1}
+                animateBeforeCommit={false}
+                onPlayShot={(shot) =>
+                  sendMsg({
+                    type: 'match:submit_shot',
+                    matchupId: myMatchup.id,
+                    shot,
+                  })
+                }
+                onPlayDelivery={(delivery) =>
+                  sendMsg({
+                    type: 'match:submit_delivery',
+                    matchupId: myMatchup.id,
+                    delivery,
+                  })
+                }
+              />
             </div>
 
             {/* Commentary */}
-            <div className="lg:col-span-5 rounded-2xl border border-slate-800 bg-slate-900/95 p-5 space-y-3">
+            <div className="lg:col-span-4 rounded-2xl border border-slate-800 bg-slate-900/95 p-5 space-y-3">
               <div className="font-display text-xl font-bold text-white pb-2 border-b border-slate-800">
                 Live Ball-by-Ball Commentary
               </div>
@@ -1723,10 +2463,19 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
   if (room.phase === 'POST_MATCH' && me) {
     const sorted = [...room.participants]
       .filter((p) => !p.isAi)
-      .sort((a, b) => b.wins - a.wins || b.purse - a.purse);
+      .map((p) => ({
+        participant: p,
+        eval: evaluateSquadPower(p.squad, room.squadSize, p.purse, room.initialPurse),
+      }))
+      .sort(
+        (a, b) =>
+          b.participant.wins - a.participant.wins ||
+          b.eval.totalScore - a.eval.totalScore ||
+          b.participant.purse - a.participant.purse
+      );
 
     return (
-      <div className="space-y-6 max-w-4xl mx-auto">
+      <div className="space-y-6 max-w-5xl mx-auto">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-6 sm:p-8 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-800">
             <div>
@@ -1745,38 +2494,96 @@ export const FriendsMultiplayer: React.FC<FriendsMultiplayerProps> = ({
             </div>
           </div>
 
+          {room.matchups.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {room.matchups.map((m, idx) => {
+                const h = room.participants.find((p) => p.clientId === m.homeClientId);
+                const a = room.participants.find((p) => p.clientId === m.awayClientId);
+                const w = room.participants.find((p) => p.clientId === m.winnerClientId);
+                return (
+                  <div
+                    key={m.id}
+                    className="p-3 rounded-xl bg-slate-950/75 border border-slate-800 text-xs flex items-center justify-between gap-3"
+                  >
+                    <div>
+                      <div className="font-semibold text-white">
+                        Pitch {idx + 1}: {h?.name} ({h?.franchiseId}) vs {a?.name} ({a?.franchiseId})
+                      </div>
+                      <div className="text-slate-400 mt-0.5">{m.winMarginText}</div>
+                    </div>
+                    <span className="font-mono font-bold text-emerald-400 shrink-0">
+                      Winner: {w?.franchiseId || '—'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="space-y-3">
-            {sorted.map((p, idx) => {
+            {sorted.map(({ participant: p, eval: ev }, idx) => {
               const f = getFranchiseById(p.franchiseId);
+              const isExpanded = expandedSquadClientId === p.clientId;
               return (
                 <div
                   key={p.clientId}
-                  className={`p-4 rounded-xl border flex items-center justify-between gap-4 ${
+                  className={`rounded-xl border overflow-hidden ${
                     p.clientId === clientId
                       ? 'bg-amber-500/10 border-amber-400/60'
                       : 'bg-slate-950/75 border-slate-800'
                   }`}
                 >
-                  <div className="flex items-center gap-3.5">
-                    <span className="font-mono text-lg font-bold text-slate-400 w-6">
-                      #{idx + 1}
-                    </span>
-                    <TeamCrest franchise={f} size="sm" />
-                    <div>
-                      <div className="font-display text-xl font-bold text-white">
-                        {p.name} · {f.shortName}
-                      </div>
-                      <div className="text-xs text-slate-400 font-mono tabular-nums">
-                        {p.wins} Wins / {p.matchesPlayed} Matches · Last +₹{p.lastEarned.toFixed(0)}Cr
+                  <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <span className="font-mono text-lg font-bold text-slate-400 w-6 tabular-nums">
+                        #{idx + 1}
+                      </span>
+                      <TeamCrest franchise={f} size="sm" />
+                      <div>
+                        <div className="font-display text-xl font-bold text-white">
+                          {p.name} · {f.shortName}
+                        </div>
+                        <div className="text-xs text-slate-400 font-mono tabular-nums">
+                          {p.wins} Wins / {p.matchesPlayed} Rounds · Squad Score{' '}
+                          {ev.totalScore.toFixed(1)}/100 · Last +₹{p.lastEarned.toFixed(0)}Cr
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-slate-400">Updated Purse</div>
-                    <div className="font-mono text-xl font-bold text-amber-400 tabular-nums">
-                      ₹{p.purse.toFixed(2)} Cr
+                    <div className="flex items-center justify-between sm:justify-end gap-4">
+                      <div className="text-right">
+                        <div className="text-xs text-slate-400">Updated Purse</div>
+                        <div className="font-mono text-xl font-bold text-amber-400 tabular-nums">
+                          ₹{p.purse.toFixed(2)} Cr
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedSquadClientId(isExpanded ? null : p.clientId)
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white cursor-pointer whitespace-nowrap"
+                      >
+                        {isExpanded ? 'Hide Squad' : `Squad (${p.squad.length})`}
+                      </button>
                     </div>
                   </div>
+                  {isExpanded && (
+                    <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {p.squad.map((sp) => (
+                        <div
+                          key={sp.id}
+                          className="px-3 py-2 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs"
+                        >
+                          <span className="text-white truncate">
+                            {sp.name} ({sp.role})
+                          </span>
+                          <span className="font-mono text-amber-400 shrink-0 tabular-nums">
+                            {sp.retained ? 'Retained' : `₹${sp.boughtPrice.toFixed(1)}Cr`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

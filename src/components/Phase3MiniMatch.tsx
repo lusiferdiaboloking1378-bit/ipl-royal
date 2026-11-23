@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ArrowRight, Flame, Shield, Target, Zap } from 'lucide-react';
+import { ArrowRight, Flame } from 'lucide-react';
 import cricketPitchArenaImg from '../assets/images/cricket_pitch_arena_1795258897143.jpg';
 import {
   BallEvent,
@@ -14,6 +14,7 @@ import {
 } from '../types/game';
 import { chooseAiDelivery, chooseAiShot, simulateBallOutcome } from '../utils/engine';
 import { soundFX } from '../utils/sound';
+import { CricketArenaGame } from './CricketArenaGame';
 import { TeamCrest } from './TeamCrest';
 
 interface Phase3MiniMatchProps {
@@ -226,7 +227,7 @@ export const Phase3MiniMatch: React.FC<Phase3MiniMatchProps> = ({
     });
   };
 
-  const handlePlayBall = (choice: ShotStyle | DeliveryType) => {
+  const handlePlayBall = (choice: ShotStyle | DeliveryType, timingBonus = 0) => {
     if (inningsBreak || needsNewUserBatter) return;
 
     const nextBallNum = ballsBowled + 1;
@@ -245,6 +246,7 @@ export const Phase3MiniMatch: React.FC<Phase3MiniMatchProps> = ({
       shot,
       delivery,
       overBall: overBallStr,
+      timingBonus: isUserBatting ? timingBonus : 0,
     });
 
     if (sim.isWicket) soundFX.playWicket();
@@ -568,8 +570,8 @@ export const Phase3MiniMatch: React.FC<Phase3MiniMatchProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left & Center: Active Matchup & Interactive Console */}
-          <div className="lg:col-span-7 space-y-5">
+          {/* Left & Center: Animated Cricket Game & Controller */}
+          <div className="lg:col-span-8 space-y-5">
             {/* Active Batter vs Bowler Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div
@@ -725,108 +727,32 @@ export const Phase3MiniMatch: React.FC<Phase3MiniMatchProps> = ({
               </div>
             )}
 
-            {/* Tactical Shot / Delivery Controls */}
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-5 space-y-4">
-              {isUserBatting ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display text-xl font-bold text-white">
-                      {superBallMode ? 'Super Ball — Choose Your Shot' : 'Choose Your Shot Style'}
-                    </h3>
-                    <span className="text-xs text-slate-400">Ball {ballsBowled + 1} of 12</span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <button
-                      type="button"
-                      disabled={needsNewUserBatter}
-                      onClick={() =>
-                        superBallMode ? handleSuperBall('DEFEND') : handlePlayBall('DEFEND')
-                      }
-                      className="p-4 rounded-xl border border-slate-700 bg-slate-950/80 hover:border-emerald-400 hover:bg-emerald-500/10 text-left transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                      <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
-                        <Shield className="w-4 h-4" />
-                        <span>Defend</span>
-                      </div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Safe stroke. Low wicket risk, steady 1s &amp; 2s.
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={needsNewUserBatter}
-                      onClick={() =>
-                        superBallMode ? handleSuperBall('BALANCED') : handlePlayBall('BALANCED')
-                      }
-                      className="p-4 rounded-xl border border-slate-700 bg-slate-950/80 hover:border-sky-400 hover:bg-sky-500/10 text-left transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                      <div className="flex items-center gap-2 text-sky-400 font-semibold text-sm">
-                        <Target className="w-4 h-4" />
-                        <span>Balanced</span>
-                      </div>
-                      <div className="text-xs text-slate-400 mt-1">
-                        Gap placement for 4s with controlled risk.
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={needsNewUserBatter}
-                      onClick={() =>
-                        superBallMode ? handleSuperBall('LOFTED') : handlePlayBall('LOFTED')
-                      }
-                      className="p-4 rounded-xl border border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20 text-left transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                      <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
-                        <Zap className="w-4 h-4" />
-                        <span>Lofted Shot</span>
-                      </div>
-                      <div className="text-xs text-slate-300 mt-1">
-                        High risk, maximum 4 &amp; 6 boundary power!
-                      </div>
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-display text-xl font-bold text-white">
-                      {superBallMode
-                        ? 'Super Ball — Choose Your Delivery'
-                        : 'Choose Your Delivery Type'}
-                    </h3>
-                    <span className="text-xs text-slate-400">Ball {ballsBowled + 1} of 12</span>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {(
-                      [
-                        { id: 'YORKER', title: 'Yorker', desc: 'Blocks sixes, bowls stumps' },
-                        { id: 'BOUNCER', title: 'Bouncer', desc: 'Pace & wicket threat' },
-                        { id: 'SLOWER', title: 'Slower Ball', desc: 'Traps lofted hitters' },
-                        { id: 'SPIN', title: 'Spin', desc: 'Flight & tight economy' },
-                      ] as const
-                    ).map((del) => (
-                      <button
-                        key={del.id}
-                        type="button"
-                        onClick={() =>
-                          superBallMode ? handleSuperBall(del.id) : handlePlayBall(del.id)
-                        }
-                        className="p-3.5 rounded-xl border border-slate-700 bg-slate-950/80 hover:border-sky-400 hover:bg-sky-500/10 text-left transition-colors cursor-pointer"
-                      >
-                        <div className="font-semibold text-sm text-sky-300">{del.title}</div>
-                        <div className="text-[11px] text-slate-400 mt-1 leading-snug">{del.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+            {/* 3D Cricket Stadium & Gamepad Controller */}
+            <CricketArenaGame
+              battingFranchise={battingFranchise}
+              bowlingFranchise={bowlingFranchise}
+              batterName={activeBatter.name}
+              bowlerName={activeBowler.name}
+              batterPlayer={activeBatter}
+              bowlerPlayer={activeBowler}
+              isUserBatting={isUserBatting}
+              isUserBowling={!isUserBatting}
+              disabled={isUserBatting && needsNewUserBatter}
+              latestBall={ballLog[0] ?? null}
+              superBallMode={superBallMode}
+              ballNumber={ballsBowled + 1}
+              animateBeforeCommit={true}
+              onPlayShot={(shot, _dir, _timing, timingBonus) =>
+                superBallMode ? handleSuperBall(shot) : handlePlayBall(shot, timingBonus)
+              }
+              onPlayDelivery={(del) =>
+                superBallMode ? handleSuperBall(del) : handlePlayBall(del)
+              }
+            />
           </div>
 
           {/* Right Column: Live Commentary & Mini Scorecard */}
-          <div className="lg:col-span-5 rounded-2xl border border-slate-800 bg-slate-900/95 p-5 space-y-4">
+          <div className="lg:col-span-4 rounded-2xl border border-slate-800 bg-slate-900/95 p-5 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h3 className="font-display text-xl font-bold text-white">Live Commentary</h3>
               <span className="text-xs text-slate-400 font-mono tabular-nums">

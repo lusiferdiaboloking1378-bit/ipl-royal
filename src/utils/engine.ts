@@ -213,13 +213,14 @@ export function simulateBallOutcome(params: {
   shot: ShotStyle;
   delivery: DeliveryType;
   overBall: string;
+  timingBonus?: number;
 }): {
   outcome: BallOutcomeCode;
   runs: number;
   isWicket: boolean;
   commentary: string;
 } {
-  const { batter, bowler, shot, delivery, overBall } = params;
+  const { batter, bowler, shot, delivery, overBall, timingBonus = 0 } = params;
 
   // Base batter rating (around 0.8 to 1.25)
   const srFactor = Math.max(0.78, Math.min(1.32, batter.stats.strikeRate / 138));
@@ -239,8 +240,8 @@ export function simulateBallOutcome(params: {
   const bowlerFormBoost = bowler.inForm ? 1.15 : 1.0;
   const bowlControl = econFactor * bowlerRoleBoost * bowlerFormBoost;
 
-  // Relative advantage (-0.4 to +0.4 approx)
-  const edge = Math.max(-0.45, Math.min(0.45, batPower - bowlControl));
+  // Relative advantage (-0.5 to +0.5 approx, influenced by controller timing)
+  const edge = Math.max(-0.5, Math.min(0.5, batPower - bowlControl + timingBonus));
 
   // Base probability weights: [0, 1, 2, 4, 6, W]
   let w0 = 24;
@@ -364,3 +365,81 @@ function buildCommentary(
       return `${overBall} · ${bwLast} to ${bLast} — WICKET! ${delName.charAt(0).toUpperCase() + delName.slice(1)} sends ${bLast} back to the dugout!`;
   }
 }
+
+export interface SquadEvaluationResult {
+  totalScore: number; // out of 100
+  strengthPts: number; // out of 60
+  balancePts: number; // out of 25
+  pursePts: number; // out of 15
+  avgOvr: number;
+  roleCounts: {
+    Batter: number;
+    Bowler: number;
+    'All-Rounder': number;
+    Wicketkeeper: number;
+  };
+  topStarName: string;
+  topStarRating: number;
+}
+
+export function evaluateSquadPower(
+  squad: DraftedPlayer[],
+  targetSquadSize: number,
+  remainingPurse: number,
+  initialPurse: number
+): SquadEvaluationResult {
+  const roleCounts = {
+    Batter: 0,
+    Bowler: 0,
+    'All-Rounder': 0,
+    Wicketkeeper: 0,
+  };
+  let sumOvr = 0;
+  let topStarName = '—';
+  let topStarRating = 0;
+
+  squad.forEach((p) => {
+    roleCounts[p.role] += 1;
+    sumOvr += p.overallRating;
+    if (p.overallRating > topStarRating) {
+      topStarRating = p.overallRating;
+      topStarName = p.name;
+    }
+  });
+
+  const avgOvr = squad.length > 0 ? Math.round((sumOvr / squad.length) * 10) / 10 : 0;
+  const fillRatio = Math.min(1, squad.length / Math.max(1, targetSquadSize));
+
+  // Strength (max 60): maps 75..95 OVR into 0..60 weighted by squad completion
+  const rawStrength = squad.length > 0 ? Math.max(0, Math.min(60, ((avgOvr - 75) / 19) * 60)) : 0;
+  const strengthPts = Math.round(rawStrength * fillRatio * 10) / 10;
+
+  // Role Balance (max 25)
+  const minBat = targetSquadSize >= 11 ? 3 : 2;
+  const minBowl = targetSquadSize >= 11 ? 3 : 2;
+  const minAr = targetSquadSize >= 11 ? 2 : 1;
+
+  const wkPts = roleCounts.Wicketkeeper >= 1 ? 7 : 0;
+  const batPts = roleCounts.Batter >= minBat ? 6 : roleCounts.Batter >= 1 ? 3 : 0;
+  const bowlPts = roleCounts.Bowler >= minBowl ? 6 : roleCounts.Bowler >= 1 ? 3 : 0;
+  const arPts = roleCounts['All-Rounder'] >= minAr ? 6 : roleCounts['All-Rounder'] >= 1 ? 3 : 0;
+  const balancePts = wkPts + batPts + bowlPts + arPts;
+
+  // Smart Purse Efficiency (max 15)
+  const safeInitial = Math.max(1, initialPurse);
+  const pursePts = Math.round(Math.min(15, Math.max(0, (remainingPurse / safeInitial) * 15)) * 10) / 10;
+
+  const totalScore = Math.round((strengthPts + balancePts + pursePts) * 10) / 10;
+
+  return {
+    totalScore,
+    strengthPts,
+    balancePts,
+    pursePts,
+    avgOvr,
+    roleCounts,
+    topStarName,
+    topStarRating,
+  };
+}
+

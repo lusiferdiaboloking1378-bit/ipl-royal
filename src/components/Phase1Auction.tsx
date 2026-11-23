@@ -229,7 +229,7 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
     );
     if (nextOnDeck) {
       auctioneerVoice.prewarmPhrase(
-        `Next up, ${nextOnDeck.name}. ${nextOnDeck.role}. Base price ${nextOnDeck.basePrice} crore.`
+        `Next up, ${nextOnDeck.name}. Base ${nextOnDeck.basePrice} crore.`
       );
       const nextPhoto = getPlayerPhotoSrc(nextOnDeck.id);
       if (nextPhoto) {
@@ -358,14 +358,14 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
     const saleStartedAt = Date.now();
     const waitSaleVoiceThenAdvance = () => {
       const elapsed = Date.now() - saleStartedAt;
-      if ((elapsed >= 2200 && !auctioneerVoice.isBusy()) || elapsed >= 4500) {
+      if ((elapsed >= 1500 && !auctioneerVoice.isSpeaking()) || elapsed >= 2800) {
         soldTimerRef.current = null;
         advanceLot();
         return;
       }
       soldTimerRef.current = window.setTimeout(waitSaleVoiceThenAdvance, 150);
     };
-    soldTimerRef.current = window.setTimeout(waitSaleVoiceThenAdvance, 2200);
+    soldTimerRef.current = window.setTimeout(waitSaleVoiceThenAdvance, 1500);
   };
 
   const triggerHammerClose = () => {
@@ -401,7 +401,7 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
     commitSale(s.currentPlayer, s.highestBidderId, s.currentBid);
   };
 
-  // Live Gavel Countdown Ticker
+  // Live Gavel Countdown Ticker (200ms ticks + GPU CSS linear transition for zero lag)
   useEffect(() => {
     if (!retentionDone || auctionComplete || soldBanner || rtmPrompt || !currentPlayer) return;
 
@@ -409,11 +409,7 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
       setCountdownMs((prev) => {
         if (prev <= 0) return 0;
         const hasBid = Boolean(stateRef.current.highestBidderId);
-        // Pause post-bid gavel countdown briefly while the auctioneer is actively announcing a bid/call
-        if (hasBid && auctioneerVoice.isBusy()) {
-          return prev;
-        }
-        const next = Math.max(0, prev - 100);
+        const next = Math.max(0, prev - 200);
         if (!hasBid) {
           if (next === 10000) {
             soundFX.playGavelTick();
@@ -439,7 +435,7 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
         }
         return next;
       });
-    }, 100);
+    }, 200);
 
     return () => window.clearInterval(interval);
   }, [retentionDone, auctionComplete, soldBanner, rtmPrompt, currentPlayer?.id, highestBidderId, currentBid]);
@@ -451,19 +447,18 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
   }, [countdownMs, retentionDone, auctionComplete, soldBanner, rtmPrompt, currentPlayer?.id]);
 
   // Multi-Franchise AI Bidding Reactor (Match Rival + 3 Table Rivals)
-  // Waits for the auctioneer to finish speaking clearly plus a natural broadcast beat before raising paddles.
   useEffect(() => {
     if (!retentionDone || auctionComplete || soldBanner || rtmPrompt || !currentPlayer) return;
 
     const startedAt = Date.now();
     const isOpening = highestBidderId === null;
-    const minElapsedMs = isOpening ? 2000 : userPassedLot ? 1400 : 2200;
+    const minElapsedMs = isOpening ? 1400 : userPassedLot ? 900 : 1400;
     const postVoiceGapMs = isOpening
-      ? 900
+      ? 500
       : userPassedLot
-      ? 750
-      : 1200 + Math.floor(Math.random() * 650);
-    let voiceIdleSince: number | null = auctioneerVoice.isBusy() ? null : Date.now();
+      ? 450
+      : 650 + Math.floor(Math.random() * 500);
+    let voiceIdleSince: number | null = auctioneerVoice.isSpeaking() ? null : Date.now();
     let timerId: number | null = null;
     let cancelled = false;
 
@@ -472,7 +467,7 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
       const now = Date.now();
       const elapsed = now - startedAt;
 
-      if (auctioneerVoice.isBusy()) {
+      if (auctioneerVoice.isSpeaking()) {
         voiceIdleSince = null;
       } else if (voiceIdleSince === null) {
         voiceIdleSince = now;
@@ -480,10 +475,10 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
 
       const idleDuration = voiceIdleSince !== null ? now - voiceIdleSince : 0;
       const ready =
-        (elapsed >= minElapsedMs && idleDuration >= postVoiceGapMs) || elapsed >= 7500;
+        (elapsed >= minElapsedMs && idleDuration >= postVoiceGapMs) || elapsed >= 3200;
 
       if (!ready) {
-        timerId = window.setTimeout(evaluateAiBid, 120);
+        timerId = window.setTimeout(evaluateAiBid, 140);
         return;
       }
 
@@ -964,7 +959,19 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
                     Lot #{currentIndex + 1} of {queue.length}
                   </span>
                 </div>
-                <PlayerCard player={currentPlayer} priceLabel="Base Price" />
+                <PlayerCard
+                  player={currentPlayer}
+                  priceLabel="Base Price"
+                  countdownMs={soldBanner ? 0 : countdownMs}
+                  countdownMaxMs={highestBidderId === null ? 15000 : 8000}
+                  auctionClosedState={
+                    soldBanner
+                      ? soldBanner.winnerId === 'UNSOLD'
+                        ? 'UNSOLD'
+                        : 'SOLD'
+                      : null
+                  }
+                />
                 {nextOnDeck && (
                   <div className="px-3.5 py-2 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-2.5 text-xs">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -1040,7 +1047,7 @@ export const Phase1Auction: React.FC<Phase1AuctionProps> = ({
               {/* Countdown Progress Bar */}
               <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-950">
                 <div
-                  className={`h-full transition-all duration-100 ${
+                  className={`h-full transition-all duration-200 ease-linear ${
                     countdownMs <= 2000
                       ? 'bg-rose-500'
                       : countdownMs <= 5000

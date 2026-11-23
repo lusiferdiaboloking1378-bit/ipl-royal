@@ -9,6 +9,8 @@ export type PlayerRole = 'Batter' | 'Bowler' | 'All-Rounder' | 'Wicketkeeper';
 
 export type StatKey = 'runs' | 'strikeRate' | 'wickets' | 'economy' | 'matches';
 
+export type PlayerPoolMode = 'ALL_PLAYERS' | 'PLAYERS_2026';
+
 export interface Franchise {
   id: string;
   shortName: string;
@@ -31,6 +33,8 @@ export interface IPLPlayer {
   battingHand: 'RHB' | 'LHB';
   bowlingStyle: string;
   overallRating: number; // 75 - 97
+  era?: 'CLASSIC' | '2026';
+  isNew2026?: boolean;
   stats: {
     runs: number;
     strikeRate: number;

@@ -8,7 +8,7 @@ import { Phase2CardBattle } from './components/Phase2CardBattle';
 import { Phase3MiniMatch } from './components/Phase3MiniMatch';
 import { Phase4Summary } from './components/Phase4Summary';
 import { TeamCrest } from './components/TeamCrest';
-import { getFranchiseById, IPL_FRANCHISES, IPL_PLAYERS_DB } from './data/iplData';
+import { getFranchiseById, getPlayersForPool, IPL_FRANCHISES } from './data/iplData';
 import {
   auth,
   loadUserProfile,
@@ -19,17 +19,18 @@ import {
   syncLeaderboardFromProfile,
   type User,
 } from './firebase';
-import { DraftedPlayer, GamePhase, IPLPlayer, MatchResult } from './types/game';
+import { DraftedPlayer, GamePhase, IPLPlayer, MatchResult, PlayerPoolMode } from './types/game';
 import { roundHalf } from './utils/engine';
 import { soundFX } from './utils/sound';
 
 const INITIAL_PURSE = 120.0;
 const SEASON_GRANT = 80.0;
 
-function buildShuffledPool(): IPLPlayer[] {
-  const marquee = IPL_PLAYERS_DB.filter((p) => p.overallRating >= 91);
-  const core = IPL_PLAYERS_DB.filter((p) => p.overallRating >= 86 && p.overallRating < 91);
-  const value = IPL_PLAYERS_DB.filter((p) => p.overallRating < 86);
+function buildShuffledPool(mode: PlayerPoolMode): IPLPlayer[] {
+  const source = getPlayersForPool(mode);
+  const marquee = source.filter((p) => p.overallRating >= 91);
+  const core = source.filter((p) => p.overallRating >= 86 && p.overallRating < 91);
+  const value = source.filter((p) => p.overallRating < 86);
 
   const shuffle = <T,>(arr: T[]): T[] => {
     const copy = [...arr];
@@ -74,6 +75,7 @@ export default function App() {
   const [selectedFranchiseId, setSelectedFranchiseId] = useState<string>('MI');
   const [aiFranchiseId, setAiFranchiseId] = useState<string>('CSK');
   const [squadSize, setSquadSize] = useState<7 | 11>(7);
+  const [playerPoolMode, setPlayerPoolMode] = useState<PlayerPoolMode>('ALL_PLAYERS');
   const [matchNumber, setMatchNumber] = useState<number>(1);
   const [muted, setMuted] = useState<boolean>(false);
 
@@ -84,7 +86,7 @@ export default function App() {
   const [careerMatches, setCareerMatches] = useState<number>(0);
 
   // Round-specific squads & battle data
-  const [auctionPool, setAuctionPool] = useState<IPLPlayer[]>(() => buildShuffledPool());
+  const [auctionPool, setAuctionPool] = useState<IPLPlayer[]>(() => buildShuffledPool('ALL_PLAYERS'));
   const [previousUserSquad, setPreviousUserSquad] = useState<DraftedPlayer[]>([]);
   const [userSquad, setUserSquad] = useState<DraftedPlayer[]>([]);
   const [aiSquad, setAiSquad] = useState<DraftedPlayer[]>([]);
@@ -156,7 +158,7 @@ export default function App() {
     setPreviousUserSquad([]);
     setUserSquad([]);
     setAiSquad([]);
-    setAuctionPool(buildShuffledPool());
+    setAuctionPool(buildShuffledPool(playerPoolMode));
     setMatchResult(null);
     setPhase('AUCTION');
   };
@@ -264,7 +266,7 @@ export default function App() {
     setPreviousUserSquad(userSquad);
     setUserSquad([]);
     setAiSquad([]);
-    setAuctionPool(buildShuffledPool());
+    setAuctionPool(buildShuffledPool(playerPoolMode));
     setMatchResult(null);
     setPhase('AUCTION');
   };
@@ -480,6 +482,7 @@ export default function App() {
             careerMatches={careerMatches}
             onRecordCareerMatch={handleRecordMultiplayerMatch}
             squadSize={squadSize}
+            defaultPlayerPoolMode={playerPoolMode}
             onExitToSolo={() => setFriendsMode(false)}
           />
         ) : (
@@ -490,6 +493,8 @@ export default function App() {
                 onSelectFranchise={handleSelectFranchise}
                 squadSize={squadSize}
                 onChangeSquadSize={setSquadSize}
+                playerPoolMode={playerPoolMode}
+                onChangePlayerPoolMode={setPlayerPoolMode}
                 onStartCareer={handleStartCareer}
                 onOpenFriendsMode={() => setFriendsMode(true)}
                 initialPurse={INITIAL_PURSE}

@@ -105,11 +105,12 @@ class AuctioneerVoiceEngine {
   private audioUnlocked = false;
   private activeAbortController: AbortController | null = null;
   private activeToken = 0;
-  private activePriority: 'high' | 'normal' = 'normal';
   private queuedNormalText: string | null = null;
   private serverTtsCooldownUntil = 0;
 
   private audioUrlCache = new Map<string, string>();
+  private prewarmInFlight = new Set<string>();
+  private prewarmedCommon = false;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -192,11 +193,12 @@ class AuctioneerVoiceEngine {
   }
 
   isSpeaking(): boolean {
-    return this.speaking;
+    return this.enabled && this.speaking;
   }
 
   isBusy(): boolean {
-    return this.enabled && (this.speaking || this.fetching);
+    // Only report speaking (never network fetching) so slow TTS never freezes auction timers or AI bids
+    return this.enabled && this.speaking;
   }
 
   setEnabled(val: boolean) {
@@ -219,6 +221,7 @@ class AuctioneerVoiceEngine {
 
   setVoiceId(id: StudioFemaleVoiceId) {
     this.selectedVoiceId = id;
+    this.prewarmedCommon = false;
     this.notify();
   }
 
@@ -263,7 +266,8 @@ class AuctioneerVoiceEngine {
   private async fetchStudioWavUrl(
     text: string,
     voiceId: StudioFemaleVoiceId,
-    externalSignal?: AbortSignal
+    externalSignal?: AbortSignal,
+    timeoutMs = 1800
   ): Promise<{ url: string | null; aborted: boolean }> {
     if (typeof window === 'undefined') return { url: null, aborted: false };
 
@@ -279,7 +283,7 @@ class AuctioneerVoiceEngine {
     }
 
     const timeoutController = new AbortController();
-    const timeoutId = window.setTimeout(() => timeoutController.abort(), 8500);
+    const timeoutId = window.setTimeout(() => timeoutController.abort(), timeoutMs);
     const onExternalAbort = () => timeoutController.abort();
     externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
 
@@ -317,7 +321,6 @@ class AuctioneerVoiceEngine {
       if (externalSignal?.aborted) {
         return { url: null, aborted: true };
       }
-      // Timed out or transient network failure — fall back to browser voice without long cooldown
       return { url: null, aborted: false };
     } finally {
       window.clearTimeout(timeoutId);
@@ -325,8 +328,38 @@ class AuctioneerVoiceEngine {
     }
   }
 
-  prewarmPhrase(_text: string) {}
-  prewarmCommonCalls() {}
+  prewarmPhrase(text: string) {
+    if (!this.enabled || typeof window === 'undefined') return;
+    if (Date.now() < this.serverTtsCooldownUntil) return;
+    const normalized = normalizeAuctionSpeech(text);
+    if (!normalized) return;
+    const voiceId = this.selectedVoiceId;
+    const cacheKey = `${voiceId}:${normalized}`;
+    if (this.audioUrlCache.has(cacheKey) || this.prewarmInFlight.has(cacheKey)) return;
+
+    this.prewarmInFlight.add(cacheKey);
+    void this.fetchStudioWavUrl(normalized, voiceId, undefined, 4000).finally(() => {
+      this.prewarmInFlight.delete(cacheKey);
+    });
+  }
+
+  prewarmCommonCalls() {
+    if (!this.enabled || this.prewarmedCommon || typeof window === 'undefined') return;
+    if (Date.now() < this.serverTtsCooldownUntil) return;
+    this.prewarmedCommon = true;
+
+    const phrases = ['Going once!', 'Going twice!', 'Going thrice!'];
+    // Stagger silently in background so they become 0ms cache hits before first gavel countdown
+    void (async () => {
+      for (const p of phrases) {
+        if (!this.enabled || Date.now() < this.serverTtsCooldownUntil) break;
+        const cacheKey = `${this.selectedVoiceId}:${p}`;
+        if (!this.audioUrlCache.has(cacheKey)) {
+          await this.fetchStudioWavUrl(p, this.selectedVoiceId, undefined, 4500);
+        }
+      }
+    })();
+  }
 
   stop() {
     this.activeToken += 1;
@@ -380,7 +413,9 @@ class AuctioneerVoiceEngine {
     if (token !== this.activeToken || !this.enabled) return;
 
     try {
-      window.speechSynthesis.cancel();
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        window.speechSynthesis.cancel();
+      }
       const utterance = new SpeechSynthesisUtterance(normalizeAuctionSpeech(text));
       const voice = this.pickFallbackBrowserVoice();
       if (voice) {
@@ -403,7 +438,6 @@ class AuctioneerVoiceEngine {
       utterance.onend = () => {
         if (token === this.activeToken) {
           this.speaking = false;
-          this.activePriority = 'normal';
           this.notify();
           this.flushQueuedNormal();
         }
@@ -411,7 +445,6 @@ class AuctioneerVoiceEngine {
       utterance.onerror = () => {
         if (token === this.activeToken) {
           this.speaking = false;
-          this.activePriority = 'normal';
           this.notify();
         }
       };
@@ -422,12 +455,64 @@ class AuctioneerVoiceEngine {
     }
   }
 
+  private playCachedOrStudioUrl(url: string, cleaned: string, token: number) {
+    const audio = this.ensureAudioElement();
+    if (!audio) {
+      this.speakBrowserFallback(cleaned, token);
+      return;
+    }
+
+    audio.onplay = () => {
+      if (token === this.activeToken) {
+        this.audioUnlocked = true;
+        this.speaking = true;
+        this.notify();
+      }
+    };
+    audio.onended = () => {
+      if (token === this.activeToken) {
+        this.speaking = false;
+        this.notify();
+        this.flushQueuedNormal();
+      }
+    };
+    audio.onerror = () => {
+      if (token === this.activeToken) {
+        this.speaking = false;
+        this.notify();
+        this.speakBrowserFallback(cleaned, token);
+      }
+    };
+
+    audio.muted = false;
+    audio.volume = 1.0;
+    audio.src = url;
+    audio.currentTime = 0;
+    const pitchAudio = audio as HTMLAudioElement & {
+      preservesPitch?: boolean;
+      webkitPreservesPitch?: boolean;
+    };
+    pitchAudio.preservesPitch = true;
+    pitchAudio.webkitPreservesPitch = true;
+    audio.playbackRate = this.speechRate;
+    this.speaking = true;
+    this.notify();
+
+    audio.play().catch(() => {
+      if (token === this.activeToken) {
+        this.speaking = false;
+        this.notify();
+        this.speakBrowserFallback(cleaned, token);
+      }
+    });
+  }
+
   speak(text: string, priority: 'high' | 'normal' = 'normal') {
     const cleaned = normalizeAuctionSpeech(text);
     if (!this.enabled || !cleaned || typeof window === 'undefined') return;
 
-    // Queue normal calls smoothly if something is actively fetching or speaking rather than cutting mid-word
-    if (priority === 'normal' && (this.speaking || this.fetching)) {
+    // Queue normal calls smoothly only if audio is actively playing (never queue behind slow fetches)
+    if (priority === 'normal' && this.speaking) {
       this.queuedNormalText = cleaned;
       return;
     }
@@ -437,97 +522,61 @@ class AuctioneerVoiceEngine {
     }
 
     const token = ++this.activeToken;
-    this.activePriority = priority;
+    const voiceId = this.selectedVoiceId;
+    const cacheKey = `${voiceId}:${cleaned}`;
 
     if (this.activeAbortController) {
       this.activeAbortController.abort();
       this.activeAbortController = null;
     }
 
-    if (this.playerAudio) {
+    if (this.playerAudio && !this.playerAudio.paused) {
       this.playerAudio.onplay = null;
       this.playerAudio.onended = null;
       this.playerAudio.onerror = null;
       this.playerAudio.pause();
       this.playerAudio.currentTime = 0;
     }
-    if ('speechSynthesis' in window) {
+    if ('speechSynthesis' in window && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) {
       window.speechSynthesis.cancel();
+    }
+
+    // 1. Instant 0ms playback if cached in memory!
+    const cachedUrl = this.audioUrlCache.get(cacheKey);
+    if (cachedUrl) {
+      this.fetching = false;
+      this.playCachedOrStudioUrl(cachedUrl, cleaned, token);
+      return;
+    }
+
+    // 2. If server TTS is in cooldown OR rapid live bid raise overlaps an in-flight Studio fetch,
+    // speak instantly with browser female voice (0ms lag) so voice stays perfectly synced with paddles!
+    const wasFetching = this.fetching;
+    if (Date.now() < this.serverTtsCooldownUntil || (priority === 'high' && wasFetching)) {
+      this.fetching = false;
+      this.speakBrowserFallback(cleaned, token);
+      return;
     }
 
     const controller = new AbortController();
     this.activeAbortController = controller;
     this.speaking = false;
     this.fetching = true;
-    this.notify();
-    const voiceId = this.selectedVoiceId;
 
-    void this.fetchStudioWavUrl(cleaned, voiceId, controller.signal).then(({ url, aborted }) => {
+    void this.fetchStudioWavUrl(cleaned, voiceId, controller.signal, 1800).then(({ url, aborted }) => {
       if (token === this.activeToken) {
         this.fetching = false;
       }
       if (aborted || token !== this.activeToken || !this.enabled) {
-        this.notify();
         return;
       }
 
       if (!url) {
-        this.notify();
         this.speakBrowserFallback(cleaned, token);
         return;
       }
 
-      const audio = this.ensureAudioElement();
-      if (!audio) {
-        this.speakBrowserFallback(cleaned, token);
-        return;
-      }
-
-      audio.onplay = () => {
-        if (token === this.activeToken) {
-          this.audioUnlocked = true;
-          this.speaking = true;
-          this.notify();
-        }
-      };
-      audio.onended = () => {
-        if (token === this.activeToken) {
-          this.speaking = false;
-          this.activePriority = 'normal';
-          this.notify();
-          this.flushQueuedNormal();
-        }
-      };
-      audio.onerror = () => {
-        if (token === this.activeToken) {
-          this.speaking = false;
-          this.notify();
-          this.speakBrowserFallback(cleaned, token);
-        }
-      };
-
-      audio.muted = false;
-      audio.volume = 1.0;
-      audio.src = url;
-      audio.currentTime = 0;
-      const pitchAudio = audio as HTMLAudioElement & {
-        preservesPitch?: boolean;
-        webkitPreservesPitch?: boolean;
-      };
-      pitchAudio.preservesPitch = true;
-      pitchAudio.webkitPreservesPitch = true;
-      audio.playbackRate = this.speechRate;
-      this.speaking = true;
-      this.notify();
-
-      audio.play().catch(() => {
-        if (token === this.activeToken) {
-          this.speaking = false;
-          this.notify();
-          // If autoplay was blocked inside an iframe or audio failed, fall back cleanly instead of silence
-          this.speakBrowserFallback(cleaned, token);
-        }
-      });
+      this.playCachedOrStudioUrl(url, cleaned, token);
     });
   }
 

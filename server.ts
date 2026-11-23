@@ -8,7 +8,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
-import { IPL_FRANCHISES, IPL_PLAYERS_DB } from './src/data/iplData.ts';
+import { getPlayersForPool, IPL_FRANCHISES } from './src/data/iplData.ts';
 import { PLAYER_PHOTO_URLS } from './src/data/playerPhotos.ts';
 import type {
   BatterMatchStats,
@@ -33,6 +33,7 @@ import {
   chooseAiDelivery,
   chooseAiShot,
   compareDuelStat,
+  evaluateSquadPower,
   getMaxAllowedBid,
   roundHalf,
   simulateBallOutcome,
@@ -330,7 +331,7 @@ async function synthesizeViaLiveSession(
           }
           closePooledLiveSession(voiceName);
           resolve({ audioBase64: null, status: 'error' });
-        }, 5500);
+        }, 2600);
 
         entry.activeTurn = { chunks: [], resolve, timer, cacheKey };
         entry.turnsUsed += 1;
@@ -436,20 +437,36 @@ function sendToClient(ws: WebSocket, msg: ServerMessage) {
 }
 
 function broadcastRoom(room: RoomState, extra?: ServerMessage) {
+  const roomPayload = JSON.stringify({ type: 'room:state', room } satisfies ServerMessage);
+  const extraPayload = extra ? JSON.stringify(extra) : null;
   for (const [, client] of clients) {
-    if (client.roomCode === room.roomCode) {
-      sendToClient(client.ws, { type: 'room:state', room });
-      if (extra) {
-        sendToClient(client.ws, extra);
+    if (client.roomCode === room.roomCode && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(roomPayload);
+      if (extraPayload) {
+        client.ws.send(extraPayload);
       }
     }
   }
 }
 
-function broadcastVoice(room: RoomState, text: string, priority: 'high' | 'normal' = 'normal') {
+function broadcastTick(room: RoomState) {
+  if (!room.auction) return;
+  const payload = JSON.stringify({
+    type: 'room:tick',
+    countdownMs: room.auction.countdownMs,
+  } satisfies ServerMessage);
   for (const [, client] of clients) {
-    if (client.roomCode === room.roomCode) {
-      sendToClient(client.ws, { type: 'room:voice', text, priority });
+    if (client.roomCode === room.roomCode && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(payload);
+    }
+  }
+}
+
+function broadcastVoice(room: RoomState, text: string, priority: 'high' | 'normal' = 'normal') {
+  const payload = JSON.stringify({ type: 'room:voice', text, priority } satisfies ServerMessage);
+  for (const [, client] of clients) {
+    if (client.roomCode === room.roomCode && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(payload);
     }
   }
 }
@@ -512,7 +529,7 @@ function startAuctionTimer(roomCode: string) {
     if (auc.countdownMs === 0) {
       resolveCurrentLot(room);
     } else {
-      broadcastRoom(room);
+      broadcastTick(room);
     }
   }, 200);
 
@@ -527,13 +544,21 @@ function stopAuctionTimer(roomCode: string) {
   }
 }
 
+function finishAuctionPhase(room: RoomState) {
+  if (room.postAuctionMode === 'AUCTION_VERDICT') {
+    transitionRoomToStandings(room);
+  } else {
+    transitionRoomToCardBattle(room);
+  }
+}
+
 function startNextLotOrFinishAuction(room: RoomState) {
   if (!room.auction) return;
   const humans = room.participants.filter((p) => !p.isAi);
   const allFull = humans.every((p) => p.squad.length >= room.squadSize);
 
   if (allFull) {
-    transitionRoomToCardBattle(room);
+    finishAuctionPhase(room);
     return;
   }
 
@@ -545,13 +570,15 @@ function startNextLotOrFinishAuction(room: RoomState) {
     const draftedIds = new Set<string>();
     humans.forEach((p) => p.squad.forEach((sp) => draftedIds.add(sp.id)));
     const remaining = sortPoolIntoIplSets(
-      IPL_PLAYERS_DB.filter((p) => !draftedIds.has(p.id)).map((p) => ({
-        ...p,
-        basePrice: 1.0,
-      }))
+      getPlayersForPool(room.playerPoolMode)
+        .filter((p) => !draftedIds.has(p.id))
+        .map((p) => ({
+          ...p,
+          basePrice: 1.0,
+        }))
     );
     if (remaining.length === 0) {
-      transitionRoomToCardBattle(room);
+      finishAuctionPhase(room);
       return;
     }
     auc.queue = remaining;
@@ -711,6 +738,16 @@ function pickBestBowlers(squad: DraftedPlayer[]): DraftedPlayer[] {
   return [...squad].sort((a, b) => a.stats.economy - b.stats.economy);
 }
 
+function transitionRoomToStandings(room: RoomState) {
+  stopAuctionTimer(room.roomCode);
+  room.auction = null;
+  room.phase = 'AUCTION_STANDINGS';
+  room.participants = room.participants.filter((p) => !p.isAi);
+  room.matchups = [];
+  broadcastRoom(room);
+  broadcastVoice(room, 'Auction complete! Inspect the final franchise squads and standings.', 'high');
+}
+
 function transitionRoomToCardBattle(room: RoomState) {
   stopAuctionTimer(room.roomCode);
   room.auction = null;
@@ -727,14 +764,15 @@ function transitionRoomToCardBattle(room: RoomState) {
       IPL_FRANCHISES.find((f) => !takenFranchises.has(f.id)) || IPL_FRANCHISES[0];
     const draftedIds = new Set<string>();
     humans.forEach((h) => h.squad.forEach((p) => draftedIds.add(p.id)));
-    const pool = IPL_PLAYERS_DB.filter((p) => !draftedIds.has(p.id));
-    const aiFill = autoFillTeamSquad([], INITIAL_PURSE, room.squadSize, pool, false);
+    const pool = getPlayersForPool(room.playerPoolMode).filter((p) => !draftedIds.has(p.id));
+    const aiFill = autoFillTeamSquad([], room.initialPurse, room.squadSize, pool, false);
     room.participants.push({
       clientId: 'AI_BOT',
       name: `${aiFranchise.shortName} AI Bot`,
       franchiseId: aiFranchise.id,
       isHost: false,
       isAi: true,
+      isReady: true,
       connected: true,
       purse: aiFill.remainingPurse,
       squad: aiFill.squad,
@@ -1083,10 +1121,22 @@ function handleMessage(ws: WebSocket, raw: string) {
     clientInfo.clientId = msg.clientId;
     clientInfo.roomCode = roomCode;
 
+    const poolMode =
+      msg.playerPoolMode === 'PLAYERS_2026' ? 'PLAYERS_2026' : 'ALL_PLAYERS';
+    const openingPurse: 80 | 100 | 120 =
+      msg.initialPurse === 80 || msg.initialPurse === 100 || msg.initialPurse === 120
+        ? msg.initialPurse
+        : INITIAL_PURSE;
+    const postMode =
+      msg.postAuctionMode === 'AUCTION_VERDICT' ? 'AUCTION_VERDICT' : 'MATCH_SHOWDOWN';
+
     const newRoom: RoomState = {
       roomCode,
       matchNumber: 1,
-      squadSize: msg.squadSize,
+      squadSize: msg.squadSize === 11 ? 11 : 7,
+      initialPurse: openingPurse,
+      playerPoolMode: poolMode,
+      postAuctionMode: postMode,
       phase: 'LOBBY',
       participants: [
         {
@@ -1095,8 +1145,9 @@ function handleMessage(ws: WebSocket, raw: string) {
           franchiseId: msg.franchiseId,
           isHost: true,
           isAi: false,
+          isReady: true,
           connected: true,
-          purse: INITIAL_PURSE,
+          purse: openingPurse,
           squad: [],
           previousSquad: [],
           retentionConfirmed: true,
@@ -1108,6 +1159,7 @@ function handleMessage(ws: WebSocket, raw: string) {
       ],
       auction: null,
       matchups: [],
+      chatMessages: [],
       announcement: null,
     };
 
@@ -1160,8 +1212,9 @@ function handleMessage(ws: WebSocket, raw: string) {
       franchiseId: chosenFranchise,
       isHost: false,
       isAi: false,
+      isReady: false,
       connected: true,
-      purse: INITIAL_PURSE,
+      purse: room.initialPurse,
       squad: [],
       previousSquad: [],
       retentionConfirmed: true,
@@ -1206,6 +1259,68 @@ function handleMessage(ws: WebSocket, raw: string) {
     return;
   }
 
+  if (msg.type === 'room:toggle_ready' && room.phase === 'LOBBY') {
+    sender.isReady = !sender.isReady;
+    broadcastRoom(room);
+    return;
+  }
+
+  if (msg.type === 'room:kick_participant' && room.phase === 'LOBBY' && sender.isHost) {
+    if (msg.targetClientId === sender.clientId) return;
+    const idx = room.participants.findIndex((p) => p.clientId === msg.targetClientId);
+    if (idx === -1) return;
+    const [kicked] = room.participants.splice(idx, 1);
+    for (const [, c] of clients) {
+      if (c.roomCode === room.roomCode && c.clientId === kicked.clientId) {
+        c.roomCode = null;
+        sendToClient(c.ws, {
+          type: 'room:kicked',
+          message: `You were removed from Room ${room.roomCode} by the Host.`,
+        });
+      }
+    }
+    broadcastRoom(room);
+    return;
+  }
+
+  if (msg.type === 'room:update_settings' && room.phase === 'LOBBY' && sender.isHost) {
+    if (msg.squadSize === 7 || msg.squadSize === 11) {
+      room.squadSize = msg.squadSize;
+    }
+    if (msg.initialPurse === 80 || msg.initialPurse === 100 || msg.initialPurse === 120) {
+      room.initialPurse = msg.initialPurse;
+      room.participants.forEach((p) => {
+        p.purse = msg.initialPurse!;
+      });
+    }
+    if (msg.playerPoolMode === 'ALL_PLAYERS' || msg.playerPoolMode === 'PLAYERS_2026') {
+      room.playerPoolMode = msg.playerPoolMode;
+    }
+    if (msg.postAuctionMode === 'MATCH_SHOWDOWN' || msg.postAuctionMode === 'AUCTION_VERDICT') {
+      room.postAuctionMode = msg.postAuctionMode;
+    }
+    broadcastRoom(room);
+    return;
+  }
+
+  if (msg.type === 'room:chat') {
+    const clean = msg.text.trim().slice(0, 180);
+    if (!clean) return;
+    room.chatMessages.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      clientId: sender.clientId,
+      senderName: sender.name,
+      franchiseId: sender.franchiseId,
+      text: clean,
+      timestamp: Date.now(),
+    });
+    if (room.chatMessages.length > 40) {
+      room.chatMessages.shift();
+    }
+    broadcastRoom(room);
+    return;
+  }
+
   if (msg.type === 'room:start_auction' && room.phase === 'LOBBY' && sender.isHost) {
     if (room.participants.length < 2) {
       sendToClient(ws, {
@@ -1215,7 +1330,16 @@ function handleMessage(ws: WebSocket, raw: string) {
       return;
     }
 
-    const queue = sortPoolIntoIplSets(IPL_PLAYERS_DB);
+    const unready = room.participants.filter((p) => !p.isAi && !p.isHost && !p.isReady);
+    if (unready.length > 0 && !msg.force) {
+      sendToClient(ws, {
+        type: 'room:error',
+        message: `Waiting for ${unready.map((u) => u.name).join(', ')} to mark Ready (or click Start Anyway).`,
+      });
+      return;
+    }
+
+    const queue = sortPoolIntoIplSets(getPlayersForPool(room.playerPoolMode));
     const first = queue[0];
     room.phase = 'AUCTION';
     room.auction = {
@@ -1251,7 +1375,9 @@ function handleMessage(ws: WebSocket, raw: string) {
     if (humans.every((h) => h.retentionConfirmed)) {
       const retainedIds = new Set<string>();
       humans.forEach((h) => h.squad.forEach((p) => retainedIds.add(p.id)));
-      const queue = sortPoolIntoIplSets(IPL_PLAYERS_DB.filter((p) => !retainedIds.has(p.id)));
+      const queue = sortPoolIntoIplSets(
+        getPlayersForPool(room.playerPoolMode).filter((p) => !retainedIds.has(p.id))
+      );
       const first = queue[0];
       room.phase = 'AUCTION';
       room.auction = {
@@ -1355,7 +1481,9 @@ function handleMessage(ws: WebSocket, raw: string) {
   if (msg.type === 'auction:autofill' && room.phase === 'AUCTION' && sender.isHost) {
     const draftedIds = new Set<string>();
     room.participants.forEach((p) => p.squad.forEach((sp) => draftedIds.add(sp.id)));
-    let remainingPool = IPL_PLAYERS_DB.filter((p) => !draftedIds.has(p.id));
+    let remainingPool = getPlayersForPool(room.playerPoolMode).filter(
+      (p) => !draftedIds.has(p.id)
+    );
 
     room.participants
       .filter((p) => !p.isAi)
@@ -1369,7 +1497,42 @@ function handleMessage(ws: WebSocket, raw: string) {
         }
       });
 
+    finishAuctionPhase(room);
+    return;
+  }
+
+  // Standings / Verdict actions
+  if (
+    room.phase === 'AUCTION_STANDINGS' &&
+    msg.type === 'room:launch_matches_from_standings' &&
+    sender.isHost
+  ) {
     transitionRoomToCardBattle(room);
+    return;
+  }
+
+  if (
+    room.phase === 'AUCTION_STANDINGS' &&
+    msg.type === 'room:finish_verdict_round' &&
+    sender.isHost
+  ) {
+    const humans = room.participants.filter((p) => !p.isAi);
+    const ranked = [...humans].sort((a, b) => {
+      const evalA = evaluateSquadPower(a.squad, room.squadSize, a.purse, room.initialPurse);
+      const evalB = evaluateSquadPower(b.squad, room.squadSize, b.purse, room.initialPurse);
+      return evalB.totalScore - evalA.totalScore || b.purse - a.purse;
+    });
+
+    ranked.forEach((p, idx) => {
+      const prize = idx === 0 ? 12.0 : idx === 1 ? 7.0 : 4.0;
+      p.purse = roundHalf(p.purse + prize);
+      p.lastEarned = prize;
+      p.matchesPlayed += 1;
+      if (idx === 0) p.wins += 1;
+    });
+
+    room.phase = 'POST_MATCH';
+    broadcastRoom(room);
     return;
   }
 
@@ -1544,6 +1707,7 @@ function handleMessage(ws: WebSocket, raw: string) {
       p.purse = roundHalf(p.purse + SEASON_GRANT);
       p.retentionConfirmed = p.previousSquad.length === 0;
       p.rtmAvailable = true;
+      p.isReady = p.isHost;
       p.lastEarned = 0;
     });
     room.matchups = [];

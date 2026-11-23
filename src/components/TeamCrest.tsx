@@ -94,6 +94,7 @@ interface PlayerPortraitProps {
   secondaryColor: string;
   jerseyNumber: number;
   variant?: 'stage' | 'avatar' | 'chip';
+  circular?: boolean;
 }
 
 export const PlayerPortrait: React.FC<PlayerPortraitProps> = ({
@@ -104,6 +105,7 @@ export const PlayerPortrait: React.FC<PlayerPortraitProps> = ({
   secondaryColor,
   jerseyNumber,
   variant = 'avatar',
+  circular = false,
 }) => {
   const src = getPlayerPhotoSrc(playerId);
   const [imgFailed, setImgFailed] = useState(false);
@@ -115,6 +117,44 @@ export const PlayerPortrait: React.FC<PlayerPortraitProps> = ({
   const showPhoto = Boolean(src) && !imgFailed;
 
   if (variant === 'stage') {
+    if (circular) {
+      return (
+        <div
+          className="relative w-full h-full rounded-full overflow-hidden select-none"
+          style={{
+            background: `radial-gradient(circle at 50% 25%, ${primaryColor}55, ${secondaryColor}90 65%, #090f1d 100%)`,
+          }}
+        >
+          {showPhoto ? (
+            <img
+              src={src!}
+              alt={`${name} portrait`}
+              referrerPolicy="no-referrer"
+              onError={() => setImgFailed(true)}
+              className="relative z-10 w-full h-full object-cover object-top"
+            />
+          ) : (
+            <div className="relative z-10 w-full h-full flex items-end justify-center pt-3">
+              <svg viewBox="0 0 120 120" className="w-[82%] h-[82%] text-slate-100/90 drop-shadow-xl" aria-hidden="true">
+                <circle cx="60" cy="34" r="16" fill="currentColor" opacity="0.92" />
+                {(role === 'Batter' || role === 'Wicketkeeper') && (
+                  <path d="M44 30 Q60 18 76 30" stroke={primaryColor} strokeWidth="4.5" fill="none" />
+                )}
+                <path
+                  d="M24 118 C24 80 37 58 60 58 C83 58 96 80 96 118 Z"
+                  fill={primaryColor}
+                  stroke="rgba(255,255,255,0.35)"
+                  strokeWidth="2"
+                />
+                <path d="M48 58 L60 72 L72 58" fill="none" stroke="#fff" strokeWidth="2.5" opacity="0.75" />
+              </svg>
+            </div>
+          )}
+          <div className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-slate-950/75 to-transparent z-20 pointer-events-none" />
+        </div>
+      );
+    }
+
     return (
       <div
         className="relative w-full h-44 sm:h-48 overflow-hidden select-none"
@@ -131,7 +171,7 @@ export const PlayerPortrait: React.FC<PlayerPortraitProps> = ({
             backgroundSize: '28px 28px',
           }}
         />
-        {/* Large Jersey Number Watermark */}
+        {/* Large Jersey Number */}
         <span className="absolute top-3 left-4 font-display text-5xl font-black text-white/15 tracking-tighter pointer-events-none tabular-nums">
           #{jerseyNumber}
         </span>
